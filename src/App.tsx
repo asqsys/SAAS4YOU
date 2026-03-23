@@ -7,6 +7,8 @@ import React, { useState, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import JSZip from 'jszip';
+import { saveAs } from 'file-saver';
 import { 
   FileSpreadsheet, 
   Upload, 
@@ -16,7 +18,8 @@ import {
   Download,
   Building2,
   Package,
-  Calculator
+  Calculator,
+  Archive
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -37,6 +40,7 @@ interface ThirdParty {
 }
 
 interface Service {
+  id: string;
   ref: string;
   description: string;
   matchKey: string; // prenom + premiere lettre nom
@@ -89,6 +93,8 @@ export default function App() {
 
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [creditDuration, setCreditDuration] = useState(30);
 
   const getLastDaysOfMonths = () => {
     const dates = [];
@@ -115,6 +121,7 @@ export default function App() {
     const tens = ['', 'dix', 'vingt', 'trente', 'quarante', 'cinquante', 'soixante', 'soixante-dix', 'quatre-vingt', 'quatre-vingt-dix'];
 
     const convert = (n: number): string => {
+      if (n === 0) return '';
       if (n < 10) return units[n];
       if (n < 20) return teens[n - 10];
       if (n < 100) {
@@ -128,8 +135,8 @@ export default function App() {
       if (n < 1000) {
         const c = Math.floor(n / 100);
         const r = n % 100;
-        const cent = c === 1 ? 'cent' : units[c] + ' cents';
-        return cent + (r > 0 ? ' ' + convert(r) : '');
+        if (c === 1) return 'cent' + (r > 0 ? ' ' + convert(r) : '');
+        return units[c] + ' cent' + (r === 0 ? 's' : ' ' + convert(r));
       }
       if (n < 1000000) {
         const m = Math.floor(n / 1000);
@@ -137,15 +144,29 @@ export default function App() {
         const mille = m === 1 ? 'mille' : convert(m) + ' mille';
         return mille + (r > 0 ? ' ' + convert(r) : '');
       }
+      if (n < 1000000000) {
+        const mill = Math.floor(n / 1000000);
+        const r = n % 1000000;
+        const million = mill === 1 ? 'un million' : convert(mill) + ' millions';
+        return million + (r > 0 ? ' ' + convert(r) : '');
+      }
       return n.toString();
     };
 
     const integerPart = Math.floor(num);
     const decimalPart = Math.round((num - integerPart) * 100);
 
-    let result = convert(integerPart) + ' dirhams';
+    if (integerPart === 0 && decimalPart === 0) return 'Zéro dirham';
+
+    let result = '';
+    if (integerPart > 0) {
+      const needsDe = integerPart >= 1000000 && integerPart % 1000000 === 0;
+      result = convert(integerPart) + (needsDe ? ' de' : '') + (integerPart > 1 ? ' dirhams' : ' dirham');
+    }
+    
     if (decimalPart > 0) {
-      result += ' et ' + convert(decimalPart) + ' centimes';
+      const cents = convert(decimalPart) + (decimalPart > 1 ? ' centimes' : ' centime');
+      result = result ? result + ' et ' + cents : cents;
     }
     return result.charAt(0).toUpperCase() + result.slice(1);
   };
@@ -218,17 +239,19 @@ export default function App() {
         setError(null);
       } else if (type === 'services') {
         const parsed = jsonData.map(row => {
+          const id = String(findValue(row, ['ID', 'Ref.', 'Reference', 'Ref', 'Code']) || '');
           const ref = String(findValue(row, ['Ref.', 'Reference', 'Ref', 'Code', 'ID']) || '');
           const description = String(findValue(row, ['Label', 'Description', 'Service', 'Prestation', 'Libellé']) || '');
           return {
+            id,
             ref,
             description,
             matchKey: ref.toUpperCase() 
           };
         });
 
-        if (parsed.length === 0 || !parsed.some(p => p.ref)) {
-          setError("Le fichier de services semble invalide ou ne contient pas de colonne 'Ref.'.");
+        if (parsed.length === 0 || (!parsed.some(p => p.id) && !parsed.some(p => p.ref))) {
+          setError("Le fichier de services semble invalide ou ne contient pas de colonne 'ID' ou 'Ref.'.");
           return;
         }
 
@@ -294,7 +317,7 @@ export default function App() {
 
   // --- Logic ---
 
-  const generateInvoices = () => {
+  const generateInvoices = async () => {
     if (billingData.length === 0) {
       setError("Aucune donnée de facturation trouvée.");
       return;
@@ -306,7 +329,6 @@ export default function App() {
       const groupedByClient: Record<string, BillingLine[]> = {};
       billingData.forEach(line => {
         let key = line.clientName.trim();
-        // Fallback if no client name in billing file: use first third party
         if (!key && thirdPartyData.length > 0) {
           key = thirdPartyData[0].name;
         }
@@ -319,7 +341,8 @@ export default function App() {
       });
 
       // For each client, generate a PDF
-      Object.entries(groupedByClient).forEach(([clientName, lines]) => {
+      const entries = Object.entries(groupedByClient);
+      for (const [clientName, lines] of entries) {
         const clientInfo = thirdPartyData.find(tp => 
           tp.name.toLowerCase().trim() === clientName.toLowerCase().trim() ||
           tp.id.toLowerCase().trim() === clientName.toLowerCase().trim()
@@ -330,21 +353,13 @@ export default function App() {
         };
 
         const invoiceLines = lines.map(line => {
-          // Robust Match logic: Prenom + Premiere lettre Nom
-          // We try to handle "First Last" and "Last First"
           const nameParts = line.serviceUser.trim().split(/\s+/);
-          let searchKey = "";
-          
           if (nameParts.length >= 2) {
             const part1 = nameParts[0].toUpperCase();
             const part2 = nameParts[nameParts.length - 1].toUpperCase();
-            
-            // Try combination 1: First-L
             const key1 = `${part1}-${part2.charAt(0)}`;
-            // Try combination 2: Last-F (in case order is reversed)
             const key2 = `${part2}-${part1.charAt(0)}`;
             
-            // Look for service containing either key
             const foundService = servicesData.find(s => 
               s.ref.toUpperCase().includes(key1) || 
               s.ref.toUpperCase().includes(key2)
@@ -361,9 +376,9 @@ export default function App() {
             }
           }
 
-          // Fallback if no match found or name parts < 2
           return {
             service: {
+              id: 'ID-MANQUANT',
               ref: 'REF-MANQUANTE',
               description: `Prestation pour ${line.serviceUser}`,
               matchKey: ''
@@ -376,8 +391,11 @@ export default function App() {
         });
 
         createPDF(clientInfo, invoiceLines);
-      });
+      }
+      
       setError(null);
+      setSuccessMessage(`Félicitations ! ${entries.length} factures ont été générées avec succès.`);
+      setTimeout(() => setSuccessMessage(null), 5000);
     } catch (err) {
       console.error(err);
       setError("Erreur lors de la génération des factures. Vérifiez le format de vos fichiers.");
@@ -386,35 +404,34 @@ export default function App() {
     }
   };
 
-  const createPDF = (client: ThirdParty, lines: any[]) => {
+  const createPDF = (client: any, lines: any[]) => {
     const doc = new jsPDF() as any;
     
-    // Header
+    const invoiceDate = new Date(selectedInvoiceDate);
+    const dueDate = new Date(invoiceDate);
+    dueDate.setDate(dueDate.getDate() + creditDuration);
+
+    const formatDate = (date: Date) => {
+      return date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    };
+
+    // Header - Top Left
+    doc.setFontSize(10);
+    doc.setTextColor(0);
+    doc.setFont("helvetica", "bold");
+    doc.text(`Invoice Number: ${invoiceReference}`, 20, 20);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Invoice Date: ${formatDate(invoiceDate)}`, 20, 26);
+    doc.text(`Payment Due: ${formatDate(dueDate)}`, 20, 32);
+    
+    // Title - Top Center
     doc.setFontSize(24);
     doc.setTextColor(41, 128, 185);
     doc.text("FACTURE", 105, 25, { align: 'center' });
     
-    doc.setFontSize(10);
-    doc.setTextColor(100);
-    doc.text(`Date de facturation: ${new Date(selectedInvoiceDate).toLocaleDateString('fr-FR')}`, 190, 20, { align: 'right' });
-    doc.text(`Référence: ${invoiceReference}`, 190, 26, { align: 'right' });
-
-    // My Company
-    doc.setFontSize(12);
-    doc.setTextColor(0);
-    doc.setFont("helvetica", "bold");
-    doc.text(companyInfo.name, 20, 45);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(10);
-    doc.text(companyInfo.address, 20, 51);
-    doc.text(companyInfo.email, 20, 56);
-    doc.text(`TVA: ${companyInfo.vat}`, 20, 61);
-
-    // Client Info
-    doc.setDrawColor(230);
-    doc.line(115, 40, 115, 65); // Vertical line
-
+    // Client Info - Right side
     doc.setFontSize(11);
+    doc.setTextColor(0);
     doc.setFont("helvetica", "bold");
     doc.text("DESTINATAIRE", 120, 45);
     doc.setFont("helvetica", "normal");
@@ -423,13 +440,15 @@ export default function App() {
     doc.text(client.address || "Adresse non spécifiée", 120, 56, { maxWidth: 70 });
     if (client.vatNumber) doc.text(`TVA: ${client.vatNumber}`, 120, 66);
 
+    const period = `${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, '0')}`;
+
     // Table
     const tableData = lines.map(l => {
       const tva = l.total * 0.20;
       const ttc = l.total + tva;
       return [
-        l.service.ref,
-        l.service.description,
+        l.service.id,
+        `${l.service.description} ${period}`,
         l.quantity,
         formatDH(l.unitPrice),
         formatDH(l.total),
@@ -440,7 +459,7 @@ export default function App() {
 
     autoTable(doc, {
       startY: 80,
-      head: [['Réf.', 'Description', 'Nbre Jours', 'P.U. (excl.)', 'Total HT', 'TVA 20%', 'Montant TTC']],
+      head: [['ID', 'Description', 'Nbre Jours', 'P.U. (excl.)', 'Total HT', 'TVA 20%', 'Montant TTC']],
       body: tableData,
       theme: 'grid',
       headStyles: { 
@@ -459,17 +478,26 @@ export default function App() {
         6: { halign: 'right', cellWidth: 25 }
       },
       styles: { fontSize: 8, cellPadding: 3 },
-      margin: { top: 80 },
+      margin: { top: 80, bottom: 40 },
       rowPageBreak: 'avoid',
       didDrawPage: (data) => {
         // Footer pagination
-        const str = "Page " + doc.internal.getNumberOfPages();
+        const pageCount = doc.internal.getNumberOfPages();
+        const str = "Page " + pageCount;
         doc.setFontSize(8);
         doc.setTextColor(150);
         doc.text(str, 190, 285, { align: 'right' });
         
-        // Custom Footer Text
-        doc.text("ASQSYS, Be Proactive Not Reactive", 105, 290, { align: 'center' });
+        // ASQSYS Info in Footer
+        doc.setFontSize(9);
+        doc.setTextColor(100);
+        doc.setFont("helvetica", "bold");
+        doc.text(companyInfo.name, 105, 275, { align: 'center' });
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8);
+        const footerAddr = `${companyInfo.address} | Email: ${companyInfo.email} | TVA: ${companyInfo.vat}`;
+        doc.text(footerAddr, 105, 280, { align: 'center' });
+        doc.text("ASQSYS, Be Proactive Not Reactive", 105, 285, { align: 'center' });
       }
     });
 
@@ -573,8 +601,8 @@ export default function App() {
         {/* Action Section */}
         <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 mb-8">
           <div className="flex flex-col items-center justify-center space-y-6">
-            <div className="flex flex-col sm:flex-row gap-6 w-full max-w-2xl">
-              <div className="flex-1">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 w-full max-w-4xl">
+              <div>
                 <label className="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider">
                   Date de facturation
                 </label>
@@ -590,15 +618,26 @@ export default function App() {
                   ))}
                 </select>
               </div>
-              <div className="flex-1">
+              <div>
                 <label className="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider">
-                  Référence de la facture
+                  Référence
                 </label>
                 <input 
                   type="text"
                   value={invoiceReference}
                   onChange={(e) => setInvoiceReference(e.target.value)}
                   placeholder="Ex: FAC-2026-001"
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl font-medium focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider">
+                  Durée crédit (jours)
+                </label>
+                <input 
+                  type="number"
+                  value={creditDuration}
+                  onChange={(e) => setCreditDuration(parseInt(e.target.value) || 0)}
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl font-medium focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
                 />
               </div>
@@ -625,18 +664,32 @@ export default function App() {
               </motion.div>
             )}
 
+            {successMessage && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="flex items-center space-x-2 bg-green-50 text-green-600 px-6 py-4 rounded-2xl border border-green-100 mb-6"
+              >
+                <CheckCircle2 className="w-5 h-5" />
+                <span className="text-sm font-bold">{successMessage}</span>
+              </motion.div>
+            )}
+
             <button
               onClick={generateInvoices}
               disabled={!filesUploaded.company || !filesUploaded.thirdParty || !filesUploaded.services || !filesUploaded.billing || processing}
               className={cn(
                 "group relative flex items-center justify-center space-x-3 px-12 py-5 rounded-2xl font-bold text-xl transition-all duration-300 shadow-xl",
-                filesUploaded.company && filesUploaded.thirdParty && filesUploaded.services && filesUploaded.billing
+                filesUploaded.company && filesUploaded.thirdParty && filesUploaded.services && filesUploaded.billing && !processing
                   ? "bg-blue-600 text-white hover:bg-blue-700 hover:scale-[1.02] active:scale-[0.98] shadow-blue-200"
                   : "bg-gray-100 text-gray-400 cursor-not-allowed shadow-none"
               )}
             >
               {processing ? (
-                <div className="w-6 h-6 border-3 border-white/30 border-t-white rounded-full animate-spin" />
+                <div className="flex items-center space-x-3">
+                  <div className="w-6 h-6 border-3 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span>Génération...</span>
+                </div>
               ) : (
                 <>
                   <Download className="w-6 h-6" />
@@ -733,17 +786,23 @@ export default function App() {
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-gray-100">
-                    <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs">Référence</th>
+                    <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs">ID (Facture)</th>
+                    <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs">Réf. (Liaison)</th>
                     <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs">Description</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {servicesData.slice(0, 5).map((service, i) => (
-                    <tr key={i} className="hover:bg-gray-50/50 transition-colors">
-                      <td className="py-4 font-mono text-blue-600 text-xs">{service.ref}</td>
-                      <td className="py-4 text-gray-600">{service.description}</td>
-                    </tr>
-                  ))}
+                  {servicesData.slice(0, 5).map((service, i) => {
+                    const invoiceDate = new Date(selectedInvoiceDate);
+                    const period = `${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, '0')}`;
+                    return (
+                      <tr key={i} className="hover:bg-gray-50/50 transition-colors">
+                        <td className="py-4 font-mono text-blue-600 text-xs">{service.id}</td>
+                        <td className="py-4 font-mono text-gray-500 text-xs">{service.ref}</td>
+                        <td className="py-4 text-gray-600">{service.description} {period}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
