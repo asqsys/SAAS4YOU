@@ -9,6 +9,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
+import QRCode from 'qrcode';
 import { 
   FileSpreadsheet, 
   Upload, 
@@ -391,7 +392,7 @@ export default function App() {
           };
         });
 
-        createPDF(clientInfo, invoiceLines);
+        await createPDF(clientInfo, invoiceLines);
       }
       
       setError(null);
@@ -405,7 +406,7 @@ export default function App() {
     }
   };
 
-  const createPDF = (client: any, lines: any[]) => {
+  const createPDF = async (client: any, lines: any[]) => {
     const doc = new jsPDF() as any;
     
     const invoiceDate = new Date(selectedInvoiceDate);
@@ -419,8 +420,22 @@ export default function App() {
     const totalHT = lines.reduce((sum, l) => sum + l.total, 0);
     const tva = totalHT * 0.20;
     const totalTTC = totalHT + tva;
+    const totalQty = lines.reduce((sum, l) => sum + l.quantity, 0);
 
     const period = `${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, '0')}`;
+
+    // Generate Integrity Hash
+    const dataToHash = `INV:${invoiceReference}|DATE:${selectedInvoiceDate}|HT:${totalHT.toFixed(2)}|TVA:${tva.toFixed(2)}|TTC:${totalTTC.toFixed(2)}|QTY:${totalQty}`;
+    const encoder = new TextEncoder();
+    const data = encoder.encode(dataToHash);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    const shortHash = hashHex.substring(0, 16).toUpperCase();
+
+    // Generate QR Code
+    const qrContent = `ASQSYS-VERIFY|${dataToHash}|HASH:${hashHex}`;
+    const qrDataUrl = await QRCode.toDataURL(qrContent, { margin: 1, width: 100 });
 
     const drawHeader = (doc: any) => {
       // Color band at the very top
@@ -442,6 +457,12 @@ export default function App() {
       doc.setTextColor(15, 23, 42); // Slate 900
       doc.setFont("helvetica", "bold");
       doc.text(formatDH(totalTTC), 190, 39, { align: 'right' });
+
+      // QR Code - Top Right (below amount)
+      doc.addImage(qrDataUrl, 'PNG', 170, 42, 20, 20);
+      doc.setFontSize(6);
+      doc.setTextColor(148, 163, 184);
+      doc.text(`ID: ${shortHash}`, 190, 64, { align: 'right' });
 
       // Invoice Details - Top Left
       doc.setFontSize(10);
@@ -539,6 +560,12 @@ export default function App() {
         doc.setFontSize(10);
         doc.setTextColor(79, 70, 229); // Indigo 600
         doc.text("Be Proactive Not Reactive", 195, 278, { align: 'right' });
+
+        // Verification Note
+        doc.setFontSize(6);
+        doc.setTextColor(148, 163, 184);
+        doc.setFont("helvetica", "normal");
+        doc.text("Facture sécurisée par QR Code. Scannez pour vérifier l'intégrité des données.", 195, 283, { align: 'right' });
       }
     });
 
