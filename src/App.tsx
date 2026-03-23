@@ -19,7 +19,8 @@ import {
   Building2,
   Package,
   Calculator,
-  Archive
+  Archive,
+  Users
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -415,32 +416,55 @@ export default function App() {
       return date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
     };
 
-    // Header - Top Left
-    doc.setFontSize(10);
-    doc.setTextColor(0);
-    doc.setFont("helvetica", "bold");
-    doc.text(`Invoice Number: ${invoiceReference}`, 20, 20);
-    doc.setFont("helvetica", "normal");
-    doc.text(`Invoice Date: ${formatDate(invoiceDate)}`, 20, 26);
-    doc.text(`Payment Due: ${formatDate(dueDate)}`, 20, 32);
-    
-    // Title - Top Center
-    doc.setFontSize(24);
-    doc.setTextColor(41, 128, 185);
-    doc.text("FACTURE", 105, 25, { align: 'center' });
-    
-    // Client Info - Right side
-    doc.setFontSize(11);
-    doc.setTextColor(0);
-    doc.setFont("helvetica", "bold");
-    doc.text("DESTINATAIRE", 120, 45);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(10);
-    doc.text(client.name, 120, 51);
-    doc.text(client.address || "Adresse non spécifiée", 120, 56, { maxWidth: 70 });
-    if (client.vatNumber) doc.text(`TVA: ${client.vatNumber}`, 120, 66);
+    const totalHT = lines.reduce((sum, l) => sum + l.total, 0);
+    const tva = totalHT * 0.20;
+    const totalTTC = totalHT + tva;
 
     const period = `${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, '0')}`;
+
+    const drawHeader = (doc: any) => {
+      // Color band at the very top
+      doc.setFillColor(79, 70, 229); // Indigo 600
+      doc.rect(0, 0, 210, 8, 'F');
+
+      // INVOICE - Top Right
+      doc.setFontSize(28);
+      doc.setTextColor(79, 70, 229);
+      doc.setFont("helvetica", "bold");
+      doc.text("INVOICE", 190, 25, { align: 'right' });
+
+      // Amount Due (MAD) - Top Right
+      doc.setFontSize(10);
+      doc.setTextColor(100, 116, 139); // Slate 500
+      doc.setFont("helvetica", "normal");
+      doc.text("Amount Due (MAD)", 190, 32, { align: 'right' });
+      doc.setFontSize(16);
+      doc.setTextColor(15, 23, 42); // Slate 900
+      doc.setFont("helvetica", "bold");
+      doc.text(formatDH(totalTTC), 190, 39, { align: 'right' });
+
+      // Invoice Details - Top Left
+      doc.setFontSize(10);
+      doc.setTextColor(15, 23, 42);
+      doc.setFont("helvetica", "bold");
+      doc.text(`Invoice Number: ${invoiceReference}`, 20, 25);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(100, 116, 139);
+      doc.text(`Invoice Date: ${formatDate(invoiceDate)}`, 20, 31);
+      doc.text(`Payment Due: ${formatDate(dueDate)}`, 20, 37);
+
+      // Client Info
+      doc.setFontSize(11);
+      doc.setTextColor(15, 23, 42);
+      doc.setFont("helvetica", "bold");
+      doc.text("BILL TO", 20, 55);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.text(client.name, 20, 61);
+      doc.setTextColor(100, 116, 139);
+      doc.text(client.address || "Adresse non spécifiée", 20, 66, { maxWidth: 70 });
+      if (client.vatNumber) doc.text(`TVA: ${client.vatNumber}`, 20, 76);
+    };
 
     // Table
     const tableData = lines.map(l => {
@@ -463,7 +487,7 @@ export default function App() {
       body: tableData,
       theme: 'grid',
       headStyles: { 
-        fillColor: [41, 128, 185],
+        fillColor: [79, 70, 229], // Indigo 600
         textColor: 255,
         fontSize: 8,
         fontStyle: 'bold',
@@ -481,48 +505,64 @@ export default function App() {
       margin: { top: 80, bottom: 40 },
       rowPageBreak: 'avoid',
       didDrawPage: (data) => {
+        // Draw Header on each page
+        drawHeader(doc);
+
         // Footer pagination
         const pageCount = doc.internal.getNumberOfPages();
         const str = "Page " + pageCount;
         doc.setFontSize(8);
-        doc.setTextColor(150);
-        doc.text(str, 190, 285, { align: 'right' });
+        doc.setTextColor(148, 163, 184); // Slate 400
+        doc.text(str, 195, 290, { align: 'right' });
         
-        // ASQSYS Info in Footer
+        // Footer Line
+        doc.setDrawColor(241, 245, 249); // Slate 100
+        doc.setLineWidth(0.5);
+        doc.line(15, 272, 195, 272);
+
+        // 3/4 part (Left) - Company Info
         doc.setFontSize(9);
-        doc.setTextColor(100);
+        doc.setTextColor(15, 23, 42); // Slate 900
         doc.setFont("helvetica", "bold");
-        doc.text(companyInfo.name, 105, 275, { align: 'center' });
+        doc.text(companyInfo.name.toUpperCase(), 15, 278);
+        
         doc.setFont("helvetica", "normal");
-        doc.setFontSize(8);
-        const footerAddr = `${companyInfo.address} | Email: ${companyInfo.email} | TVA: ${companyInfo.vat}`;
-        doc.text(footerAddr, 105, 280, { align: 'center' });
-        doc.text("ASQSYS, Be Proactive Not Reactive", 105, 285, { align: 'center' });
+        doc.setFontSize(7);
+        doc.setTextColor(100, 116, 139); // Slate 500
+        const footerAddr = `${companyInfo.address}`;
+        const footerContact = `Email: ${companyInfo.email} | TVA: ${companyInfo.vat}`;
+        doc.text(footerAddr, 15, 283, { maxWidth: 135 });
+        doc.text(footerContact, 15, 288);
+
+        // 1/4 part (Right) - Slogan
+        doc.setFont("helvetica", "bolditalic");
+        doc.setFontSize(10);
+        doc.setTextColor(79, 70, 229); // Indigo 600
+        doc.text("Be Proactive Not Reactive", 195, 278, { align: 'right' });
       }
     });
 
     const finalY = (doc as any).lastAutoTable.finalY;
-    const totalHT = lines.reduce((sum, l) => sum + l.total, 0);
-    const tva = totalHT * 0.20;
-    const totalTTC = totalHT + tva;
 
     // Totals Box
     const boxWidth = 70;
     const startX = 190 - boxWidth;
     
     doc.setFontSize(10);
+    doc.setTextColor(100, 116, 139); // Slate 500
     doc.text(`Total HT:`, startX, finalY + 15);
     doc.text(formatDH(totalHT), 190, finalY + 15, { align: 'right' });
     
     doc.text(`TVA (20%):`, startX, finalY + 22);
     doc.text(formatDH(tva), 190, finalY + 22, { align: 'right' });
     
-    doc.setDrawColor(41, 128, 185);
+    doc.setDrawColor(79, 70, 229); // Indigo 600
     doc.setLineWidth(0.5);
     doc.line(startX, finalY + 26, 190, finalY + 26);
     
     doc.setFont("helvetica", "bold");
     doc.setFontSize(12);
+    doc.setTextColor(15, 23, 42); // Slate 900
     doc.text(`TOTAL TTC:`, startX, finalY + 33);
     doc.text(formatDH(totalTTC), 190, finalY + 33, { align: 'right' });
 
@@ -537,48 +577,50 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F8F9FA] text-[#2D3436] font-sans p-4 md:p-8">
-      <div className="max-w-5xl mx-auto">
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans p-4 md:p-12">
+      <div className="max-w-6xl mx-auto">
         {/* Header */}
-        <header className="mb-12 flex flex-col md:flex-row items-center justify-between gap-6">
+        <header className="mb-16 flex flex-col md:flex-row items-center justify-between gap-8">
           <div className="text-center md:text-left">
             <motion.div 
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="inline-flex items-center justify-center p-3 bg-blue-600 rounded-2xl mb-4 shadow-lg shadow-blue-200"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="inline-flex items-center justify-center p-4 bg-indigo-600 rounded-3xl mb-6 shadow-xl shadow-indigo-100"
             >
-              <Calculator className="w-8 h-8 text-white" />
+              <Calculator className="w-10 h-10 text-white" />
             </motion.div>
-            <h1 className="text-4xl font-bold tracking-tight text-[#1E272E] mb-2">FactureGen</h1>
-            <p className="text-[#636E72] text-lg">Générez vos factures PDF à partir de vos exports Excel</p>
+            <h1 className="text-5xl font-black tracking-tight text-slate-900 mb-3">
+              ASQ<span className="text-indigo-600">SYS</span>
+            </h1>
+            <p className="text-slate-500 text-xl font-medium">Générez vos factures PDF professionnelles en un clic</p>
           </div>
           
           <button 
             onClick={() => setShowSettings(true)}
-            className="flex items-center space-x-2 px-6 py-3 bg-white border border-gray-200 rounded-2xl font-bold text-gray-600 hover:bg-gray-50 transition-all shadow-sm"
+            className="flex items-center space-x-3 px-8 py-4 bg-white border border-slate-200 rounded-3xl font-bold text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm card-shadow"
           >
-            <Building2 className="w-5 h-5" />
+            <Building2 className="w-6 h-6 text-indigo-600" />
             <span>Ma Société</span>
           </button>
         </header>
 
         {/* Main Content */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
           <FileCard 
             title="Ma Société" 
             icon={<Building2 className="w-5 h-5" />}
             uploaded={filesUploaded.company}
             count={filesUploaded.company ? 1 : 0}
             onChange={(e) => handleFileUpload(e, 'company')}
-            description="Informations de l'émetteur"
+            description="Infos émetteur"
           />
           <FileCard 
-            title="Tiers (Clients)" 
-            icon={<Building2 className="w-5 h-5" />}
+            title="Clients" 
+            icon={<Users className="w-5 h-5" />}
             uploaded={filesUploaded.thirdParty}
             count={thirdPartyData.length}
             onChange={(e) => handleFileUpload(e, 'thirdParty')}
-            description="Liste des entreprises à facturer"
+            description="Liste des tiers"
           />
           <FileCard 
             title="Services" 
@@ -586,7 +628,7 @@ export default function App() {
             uploaded={filesUploaded.services}
             count={servicesData.length}
             onChange={(e) => handleFileUpload(e, 'services')}
-            description="Catalogue des prestations"
+            description="Catalogue prestations"
           />
           <FileCard 
             title="Facturation" 
@@ -594,22 +636,22 @@ export default function App() {
             uploaded={filesUploaded.billing}
             count={billingData.length}
             onChange={(e) => handleFileUpload(e, 'billing')}
-            description="Données mensuelles d'activité"
+            description="Données d'activité"
           />
         </div>
 
         {/* Action Section */}
-        <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 mb-8">
-          <div className="flex flex-col items-center justify-center space-y-6">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 w-full max-w-4xl">
+        <div className="bg-white rounded-[2rem] p-10 shadow-sm border border-slate-100 mb-12 card-shadow">
+          <div className="flex flex-col items-center justify-center space-y-8">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-8 w-full max-w-4xl">
               <div>
-                <label className="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider">
+                <label className="block text-[10px] font-black text-slate-400 mb-3 uppercase tracking-[0.2em] ml-1">
                   Date de facturation
                 </label>
                 <select 
                   value={selectedInvoiceDate}
                   onChange={(e) => setSelectedInvoiceDate(e.target.value)}
-                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl font-medium focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                  className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all appearance-none cursor-pointer"
                 >
                   {getLastDaysOfMonths().map(date => (
                     <option key={date} value={date}>
@@ -619,7 +661,7 @@ export default function App() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider">
+                <label className="block text-[10px] font-black text-slate-400 mb-3 uppercase tracking-[0.2em] ml-1">
                   Référence
                 </label>
                 <input 
@@ -627,29 +669,29 @@ export default function App() {
                   value={invoiceReference}
                   onChange={(e) => setInvoiceReference(e.target.value)}
                   placeholder="Ex: FAC-2026-001"
-                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl font-medium focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                  className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all"
                 />
               </div>
               <div>
-                <label className="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider">
+                <label className="block text-[10px] font-black text-slate-400 mb-3 uppercase tracking-[0.2em] ml-1">
                   Durée crédit (jours)
                 </label>
                 <input 
                   type="number"
                   value={creditDuration}
                   onChange={(e) => setCreditDuration(parseInt(e.target.value) || 0)}
-                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl font-medium focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                  className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all"
                 />
               </div>
             </div>
 
             <div className="flex items-center space-x-4 flex-wrap justify-center gap-y-4">
               <StatusBadge active={filesUploaded.company} label="Société" />
-              <div className="hidden sm:block w-8 h-px bg-gray-200" />
+              <div className="hidden sm:block w-8 h-px bg-slate-100" />
               <StatusBadge active={filesUploaded.thirdParty} label="Tiers" />
-              <div className="hidden sm:block w-8 h-px bg-gray-200" />
+              <div className="hidden sm:block w-8 h-px bg-slate-100" />
               <StatusBadge active={filesUploaded.services} label="Services" />
-              <div className="hidden sm:block w-8 h-px bg-gray-200" />
+              <div className="hidden sm:block w-8 h-px bg-slate-100" />
               <StatusBadge active={filesUploaded.billing} label="Facturation" />
             </div>
 
@@ -657,10 +699,10 @@ export default function App() {
               <motion.div 
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="flex items-center space-x-2 text-red-500 bg-red-50 px-4 py-2 rounded-xl border border-red-100"
+                className="flex items-center space-x-2 text-red-500 bg-red-50 px-6 py-3 rounded-2xl border border-red-100"
               >
-                <AlertCircle className="w-4 h-4" />
-                <span className="text-sm font-medium">{error}</span>
+                <AlertCircle className="w-5 h-5" />
+                <span className="text-sm font-bold">{error}</span>
               </motion.div>
             )}
 
@@ -668,10 +710,10 @@ export default function App() {
               <motion.div 
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="flex items-center space-x-2 bg-green-50 text-green-600 px-6 py-4 rounded-2xl border border-green-100 mb-6"
+                className="flex items-center space-x-2 bg-emerald-50 text-emerald-600 px-8 py-5 rounded-[2rem] border border-emerald-100 mb-6"
               >
-                <CheckCircle2 className="w-5 h-5" />
-                <span className="text-sm font-bold">{successMessage}</span>
+                <CheckCircle2 className="w-6 h-6" />
+                <span className="text-base font-black">{successMessage}</span>
               </motion.div>
             )}
 
@@ -679,15 +721,15 @@ export default function App() {
               onClick={generateInvoices}
               disabled={!filesUploaded.company || !filesUploaded.thirdParty || !filesUploaded.services || !filesUploaded.billing || processing}
               className={cn(
-                "group relative flex items-center justify-center space-x-3 px-12 py-5 rounded-2xl font-bold text-xl transition-all duration-300 shadow-xl",
+                "group relative flex items-center justify-center space-x-4 px-16 py-6 rounded-[2rem] font-black text-2xl transition-all duration-500 shadow-2xl",
                 filesUploaded.company && filesUploaded.thirdParty && filesUploaded.services && filesUploaded.billing && !processing
-                  ? "bg-blue-600 text-white hover:bg-blue-700 hover:scale-[1.02] active:scale-[0.98] shadow-blue-200"
-                  : "bg-gray-100 text-gray-400 cursor-not-allowed shadow-none"
+                  ? "bg-indigo-600 text-white hover:bg-indigo-700 hover:scale-[1.02] active:scale-[0.98] shadow-indigo-200"
+                  : "bg-slate-100 text-slate-300 cursor-not-allowed shadow-none"
               )}
             >
               {processing ? (
                 <div className="flex items-center space-x-3">
-                  <div className="w-6 h-6 border-3 border-white/30 border-t-white rounded-full animate-spin" />
+                  <div className="w-8 h-8 border-4 border-white/30 border-t-white rounded-full animate-spin" />
                   <span>Génération...</span>
                 </div>
               ) : (
@@ -698,7 +740,7 @@ export default function App() {
               )}
             </button>
             
-            <p className="text-sm text-gray-400 font-medium">
+            <p className="text-sm text-slate-400 font-bold tracking-tight">
               {processing ? "Traitement en cours..." : "Tous les fichiers doivent être chargés pour commencer"}
             </p>
           </div>
@@ -711,25 +753,25 @@ export default function App() {
             animate={{ opacity: 1, y: 0 }}
             className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 overflow-hidden mb-8"
           >
-            <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
-              <FileText className="w-5 h-5 text-blue-600" />
+            <h2 className="text-xl font-bold mb-6 flex items-center gap-2 text-slate-800">
+              <FileText className="w-5 h-5 text-indigo-600" />
               Aperçu des données à facturer
             </h2>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
-                  <tr className="border-b border-gray-100">
-                    <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs">Client</th>
-                    <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs">Collaborateur</th>
-                    <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs text-right">Nbre Jours</th>
-                    <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs text-right">P.U. (excl.)</th>
-                    <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs text-right">Total HT</th>
-                    <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs text-right">TVA 20%</th>
-                    <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs text-right">Montant TTC</th>
-                    <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs text-center">Match</th>
+                  <tr className="border-b border-slate-100">
+                    <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px]">Client</th>
+                    <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px]">Collaborateur</th>
+                    <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px] text-right">Nbre Jours</th>
+                    <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px] text-right">P.U. (excl.)</th>
+                    <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px] text-right">Total HT</th>
+                    <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px] text-right">TVA 20%</th>
+                    <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px] text-right">Montant TTC</th>
+                    <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px] text-center">Match</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-50">
+                <tbody className="divide-y divide-slate-50">
                   {billingData.slice(0, 5).map((line, i) => {
                     const nameParts = line.serviceUser.trim().split(/\s+/);
                     let isMatched = false;
@@ -743,13 +785,13 @@ export default function App() {
                     }
                     return (
                       <tr key={i} className="hover:bg-gray-50/50 transition-colors">
-                        <td className="py-4 font-medium">{line.clientName}</td>
-                        <td className="py-4 text-gray-600">{line.serviceUser}</td>
-                        <td className="py-4 text-right font-medium">{line.quantity}</td>
-                        <td className="py-4 text-right font-medium">{formatDH(line.unitPrice)}</td>
-                        <td className="py-4 text-right font-bold text-gray-700">{formatDH(line.amount)}</td>
-                        <td className="py-4 text-right text-gray-500">{formatDH(line.amount * 0.20)}</td>
-                        <td className="py-4 text-right font-bold text-blue-600">{formatDH(line.amount * 1.20)}</td>
+                        <td className="py-4 font-bold text-indigo-600">{line.clientName}</td>
+                        <td className="py-4 text-slate-600 font-medium">{line.serviceUser}</td>
+                        <td className="py-4 text-right font-mono text-slate-500">{line.quantity}</td>
+                        <td className="py-4 text-right font-mono text-slate-500">{formatDH(line.unitPrice)}</td>
+                        <td className="py-4 text-right font-bold text-slate-700">{formatDH(line.amount)}</td>
+                        <td className="py-4 text-right text-slate-400">{formatDH(line.amount * 0.20)}</td>
+                        <td className="py-4 text-right font-bold text-indigo-600">{formatDH(line.amount * 1.20)}</td>
                         <td className="py-4 text-center">
                           {isMatched ? (
                             <span className="px-2 py-1 bg-green-50 text-green-600 rounded-full text-[10px] font-bold uppercase tracking-wider">OK</span>
@@ -918,25 +960,25 @@ function FileCard({ title, icon, uploaded, count, onChange, description }: {
 }) {
   return (
     <div className={cn(
-      "relative bg-white p-6 rounded-3xl border transition-all duration-300",
-      uploaded ? "border-green-200 bg-green-50/30" : "border-gray-100 hover:border-blue-200 hover:shadow-lg hover:shadow-blue-50"
+      "relative bg-white p-8 rounded-[2rem] border transition-all duration-500 card-shadow",
+      uploaded ? "border-emerald-100 bg-emerald-50/20" : "border-slate-100 hover:border-indigo-200 hover:shadow-2xl hover:shadow-indigo-50"
     )}>
-      <div className="flex items-start justify-between mb-4">
+      <div className="flex items-start justify-between mb-6">
         <div className={cn(
-          "p-3 rounded-2xl",
-          uploaded ? "bg-green-100 text-green-600" : "bg-blue-50 text-blue-600"
+          "p-4 rounded-2xl shadow-sm",
+          uploaded ? "bg-emerald-100 text-emerald-600" : "bg-indigo-50 text-indigo-600"
         )}>
           {icon}
         </div>
         {uploaded && (
           <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="flex flex-col items-end">
-            <CheckCircle2 className="w-6 h-6 text-green-500" />
-            <span className="text-[10px] font-bold text-green-600 mt-1 uppercase tracking-tighter">{count} lignes</span>
+            <CheckCircle2 className="w-6 h-6 text-emerald-500" />
+            <span className="text-[10px] font-black text-emerald-600 mt-1 uppercase tracking-widest">{count} lignes</span>
           </motion.div>
         )}
       </div>
-      <h3 className="font-bold text-lg text-[#1E272E] mb-1">{title}</h3>
-      <p className="text-sm text-gray-500 mb-6 leading-relaxed">{description}</p>
+      <h3 className="font-black text-xl text-slate-800 mb-2">{title}</h3>
+      <p className="text-sm text-slate-400 font-medium mb-8 leading-relaxed">{description}</p>
       
       <label className="block">
         <span className="sr-only">Choisir un fichier</span>
@@ -945,12 +987,12 @@ function FileCard({ title, icon, uploaded, count, onChange, description }: {
           accept=".xlsx, .xls, .csv"
           onChange={onChange}
           className="block w-full text-sm text-slate-500
-            file:mr-4 file:py-2 file:px-4
-            file:rounded-xl file:border-0
-            file:text-sm file:font-semibold
-            file:bg-blue-50 file:text-blue-700
-            hover:file:bg-blue-100
-            cursor-pointer"
+            file:mr-4 file:py-2.5 file:px-6
+            file:rounded-2xl file:border-0
+            file:text-sm file:font-bold
+            file:bg-indigo-50 file:text-indigo-700
+            hover:file:bg-indigo-100
+            transition-all cursor-pointer"
         />
       </label>
     </div>
@@ -959,15 +1001,17 @@ function FileCard({ title, icon, uploaded, count, onChange, description }: {
 
 function StatusBadge({ active, label }: { active: boolean, label: string }) {
   return (
-    <div className="flex flex-col items-center space-y-2">
+    <div className={cn(
+      "flex items-center space-x-2 px-4 py-2 rounded-2xl border transition-all duration-500",
+      active 
+        ? "bg-emerald-50 border-emerald-100 text-emerald-600 font-bold" 
+        : "bg-slate-50 border-slate-100 text-slate-400 font-medium"
+    )}>
       <div className={cn(
-        "w-4 h-4 rounded-full transition-colors duration-500",
-        active ? "bg-green-500 shadow-lg shadow-green-200" : "bg-gray-200"
+        "w-2 h-2 rounded-full",
+        active ? "bg-emerald-500 animate-pulse" : "bg-slate-300"
       )} />
-      <span className={cn(
-        "text-xs font-bold uppercase tracking-wider",
-        active ? "text-green-600" : "text-gray-400"
-      )}>{label}</span>
+      <span className="text-xs uppercase tracking-widest">{label}</span>
     </div>
   );
 }
