@@ -1,0 +1,5 @@
+{
+  "name": "FactureGen - Excel to PDF Invoice Generator",
+  "description": "Transformez vos fichiers Excel Facturation_Aston, ThirdPARTY et export_service en factures PDF professionnelles (mono ou multi-pages).",
+  "requestFramePermissions": []
+}
