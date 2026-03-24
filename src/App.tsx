@@ -22,7 +22,9 @@ import {
   Calculator,
   Archive,
   Users,
-  Check
+  Check,
+  HelpCircle,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -100,6 +102,7 @@ export default function App() {
   });
 
   const [showSettings, setShowSettings] = useState(false);
+  const [showFAQ, setShowFAQ] = useState(false);
 
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -153,7 +156,15 @@ export default function App() {
   const getPersistentId = () => {
     let id = localStorage.getItem('asqsys_machine_id');
     if (!id) {
-      id = crypto.randomUUID();
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        id = crypto.randomUUID();
+      } else {
+        // Fallback for non-secure contexts (HTTP)
+        id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+          const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+          return v.toString(16);
+        });
+      }
       localStorage.setItem('asqsys_machine_id', id);
     }
     return id;
@@ -515,20 +526,28 @@ export default function App() {
     const machineId = getPersistentId();
     const fingerprint = getMachineFingerprint();
     const sourceData = `${machineId}|${fingerprint}|${navigator.userAgent}`;
-    const sourceBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sourceData));
-    const sourceHash = Array.from(new Uint8Array(sourceBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-    const sourceSignature = sourceHash.substring(0, 12).toUpperCase();
+    
+    let sourceSignature = "HTTP-UNSAFE";
+    let hashHex = "NO-HASH-IN-HTTP";
+    
+    if (typeof crypto !== 'undefined' && crypto.subtle) {
+      const sourceBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sourceData));
+      const sourceHash = Array.from(new Uint8Array(sourceBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+      sourceSignature = sourceHash.substring(0, 12).toUpperCase();
 
-    // Generate Integrity Hash (Now includes Source Signature)
-    const dataToHash = `INV:${invoiceRef}|DATE:${selectedInvoiceDate}|HT:${totalHT.toFixed(2)}|TVA:${tva.toFixed(2)}|TTC:${totalTTC.toFixed(2)}|QTY:${totalQty}|SRC:${sourceSignature}`;
-    const encoder = new TextEncoder();
-    const data = encoder.encode(dataToHash);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      // Generate Integrity Hash (Now includes Source Signature)
+      const dataToHash = `INV:${invoiceRef}|DATE:${selectedInvoiceDate}|HT:${totalHT.toFixed(2)}|TVA:${tva.toFixed(2)}|TTC:${totalTTC.toFixed(2)}|QTY:${totalQty}|SRC:${sourceSignature}`;
+      const encoder = new TextEncoder();
+      const data = encoder.encode(dataToHash);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
     const shortHash = hashHex.substring(0, 16).toUpperCase();
 
     // Generate QR Code
+    const dataToHash = `INV:${invoiceRef}|DATE:${selectedInvoiceDate}|HT:${totalHT.toFixed(2)}|TVA:${tva.toFixed(2)}|TTC:${totalTTC.toFixed(2)}|QTY:${totalQty}|SRC:${sourceSignature}`;
     const qrContent = `ASQSYS-VERIFY|${dataToHash}|HASH:${hashHex}`;
     const qrDataUrl = await QRCode.toDataURL(qrContent, { margin: 1, width: 100 });
 
@@ -746,14 +765,23 @@ export default function App() {
             </h1>
             <p className="text-slate-500 text-xl font-medium">Générez vos factures PDF professionnelles en un clic</p>
           </div>
-          
-          <button 
-            onClick={() => setShowSettings(true)}
-            className="flex items-center space-x-3 px-8 py-4 bg-white border border-slate-200 rounded-3xl font-bold text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm card-shadow"
-          >
-            <Building2 className="w-6 h-6 text-indigo-600" />
-            <span>Ma Société</span>
-          </button>
+          <div className="flex flex-wrap items-center justify-center md:justify-end gap-4">
+            <button 
+              onClick={() => setShowSettings(true)}
+              className="flex items-center space-x-3 px-8 py-4 bg-white border border-slate-200 rounded-3xl font-bold text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm card-shadow"
+            >
+              <Building2 className="w-6 h-6 text-indigo-600" />
+              <span>Ma Société</span>
+            </button>
+            
+            <button 
+              onClick={() => setShowFAQ(true)}
+              className="flex items-center space-x-3 px-8 py-4 bg-indigo-50 border border-indigo-100 rounded-3xl font-bold text-indigo-600 hover:bg-indigo-100 transition-all shadow-sm"
+            >
+              <HelpCircle className="w-6 h-6" />
+              <span>Guide (FAQ)</span>
+            </button>
+          </div>
         </header>
 
         {/* Main Content */}
@@ -1119,6 +1147,178 @@ export default function App() {
             </div>
           </motion.div>
         )}
+
+        {/* FAQ Modal */}
+        <AnimatePresence>
+          {showFAQ && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 md:p-8">
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setShowFAQ(false)}
+                className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+              />
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="relative w-full max-w-4xl max-h-[90vh] bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col"
+              >
+                <div className="p-8 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                  <div className="flex items-center space-x-4">
+                    <div className="p-3 bg-indigo-600 rounded-2xl">
+                      <HelpCircle className="w-6 h-6 text-white" />
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-900">Guide d'utilisation</h2>
+                      <p className="text-slate-500 font-medium">Structure des fichiers et conseils</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setShowFAQ(false)}
+                    className="p-3 hover:bg-slate-100 rounded-2xl transition-colors"
+                  >
+                    <X className="w-6 h-6 text-slate-400" />
+                  </button>
+                </div>
+
+                <div className="p-8 overflow-y-auto custom-scrollbar space-y-12">
+                  {/* Introduction */}
+                  <section>
+                    <h3 className="text-lg font-black text-indigo-600 uppercase tracking-widest mb-4">Introduction</h3>
+                    <p className="text-slate-600 leading-relaxed">
+                      Pour générer vos factures, l'application nécessite 4 fichiers Excel spécifiques. 
+                      L'application est flexible sur les noms de colonnes (elle cherche des mots-clés), 
+                      mais il est recommandé de suivre les structures ci-dessous pour une détection optimale.
+                    </p>
+                  </section>
+
+                  {/* 1. Fichier Société */}
+                  <section className="bg-slate-50 p-8 rounded-[2rem] border border-slate-100">
+                    <div className="flex items-center space-x-3 mb-6">
+                      <Building2 className="w-6 h-6 text-indigo-600" />
+                      <h3 className="text-xl font-black text-slate-900">1. Fichier Société (Ma Société)</h3>
+                    </div>
+                    <p className="text-sm text-slate-500 mb-4 italic">Contient vos informations légales et bancaires.</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <p className="text-xs font-black text-slate-400 uppercase tracking-wider">Colonnes obligatoires</p>
+                        <ul className="text-sm text-slate-700 space-y-1">
+                          <li>• <span className="font-bold">Name / Nom</span> : Votre raison sociale</li>
+                          <li>• <span className="font-bold">Address / Adresse</span> : Siège social</li>
+                          <li>• <span className="font-bold">Email</span> : Contact facturation</li>
+                          <li>• <span className="font-bold">VAT ID / TVA</span> : Votre numéro de TVA</li>
+                        </ul>
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-xs font-black text-slate-400 uppercase tracking-wider">Colonnes de paiement</p>
+                        <ul className="text-sm text-slate-700 space-y-1">
+                          <li>• <span className="font-bold">Payment bank account 1</span> : IBAN/RIB principal</li>
+                          <li>• <span className="font-bold">Payment bank account 2</span> : IBAN/RIB secondaire</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* 2. Fichier Tiers */}
+                  <section className="bg-slate-50 p-8 rounded-[2rem] border border-slate-100">
+                    <div className="flex items-center space-x-3 mb-6">
+                      <Users className="w-6 h-6 text-indigo-600" />
+                      <h3 className="text-xl font-black text-slate-900">2. Fichier Tiers (Clients)</h3>
+                    </div>
+                    <p className="text-sm text-slate-500 mb-4 italic">Base de données de vos clients.</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <p className="text-xs font-black text-slate-400 uppercase tracking-wider">Colonnes clés</p>
+                        <ul className="text-sm text-slate-700 space-y-1">
+                          <li>• <span className="font-bold">Name / Nom</span> : Nom du client (doit correspondre au fichier facturation)</li>
+                          <li>• <span className="font-bold">Address / Adresse</span> : Adresse de facturation</li>
+                          <li>• <span className="font-bold">VAT ID / TVA</span> : Numéro de TVA du client</li>
+                        </ul>
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-xs font-black text-slate-400 uppercase tracking-wider">Optionnel</p>
+                        <ul className="text-sm text-slate-700 space-y-1">
+                          <li>• <span className="font-bold">Customer Code</span> : Votre référence interne</li>
+                          <li>• <span className="font-bold">Email</span> : Pour vos archives</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* 3. Fichier Prestations */}
+                  <section className="bg-slate-50 p-8 rounded-[2rem] border border-slate-100">
+                    <div className="flex items-center space-x-3 mb-6">
+                      <Package className="w-6 h-6 text-indigo-600" />
+                      <h3 className="text-xl font-black text-slate-900">3. Fichier Prestations (Services)</h3>
+                    </div>
+                    <p className="text-sm text-slate-500 mb-4 italic">Catalogue de vos services pour le rapprochement automatique.</p>
+                    <ul className="text-sm text-slate-700 space-y-2">
+                      <li>• <span className="font-bold">Ref / Reference</span> : Code unique du service (ex: CONS-DEV). <br/><span className="text-xs text-indigo-500">Note: L'application tente de faire correspondre ce code avec le nom de l'intervenant dans le fichier facturation.</span></li>
+                      <li>• <span className="font-bold">Label / Description</span> : Libellé qui apparaîtra sur la facture.</li>
+                    </ul>
+                  </section>
+
+                  {/* 4. Fichier Facturation */}
+                  <section className="bg-indigo-600 p-8 rounded-[2rem] text-white">
+                    <div className="flex items-center space-x-3 mb-6">
+                      <FileSpreadsheet className="w-6 h-6 text-white" />
+                      <h3 className="text-xl font-black">4. Fichier Facturation (Données)</h3>
+                    </div>
+                    <p className="text-sm text-indigo-100 mb-6 italic">C'est le fichier moteur qui contient les lignes de prestations du mois.</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-3">
+                        <p className="text-xs font-black text-indigo-200 uppercase tracking-wider">Colonnes de calcul</p>
+                        <ul className="text-sm space-y-2">
+                          <li>• <span className="font-bold">Nbre de jours / Quantity</span> : Quantité (ex: 15)</li>
+                          <li>• <span className="font-bold">Unit price (excl.)</span> : Prix unitaire Hors Taxe</li>
+                          <li>• <span className="font-bold">Amount / Montant</span> : Total ligne (si prix unitaire absent)</li>
+                        </ul>
+                      </div>
+                      <div className="space-y-3">
+                        <p className="text-xs font-black text-indigo-200 uppercase tracking-wider">Colonnes de liaison</p>
+                        <ul className="text-sm space-y-2">
+                          <li>• <span className="font-bold">Client Name</span> : Doit correspondre au nom dans le fichier Tiers.</li>
+                          <li>• <span className="font-bold">Service User</span> : Nom de l'intervenant ou du service.</li>
+                          <li>• <span className="font-bold">Date</span> : Date de la prestation.</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* Conseils */}
+                  <section className="p-8 border-2 border-dashed border-slate-100 rounded-[2rem]">
+                    <h3 className="text-lg font-black text-slate-900 mb-4">💡 Conseils d'expert</h3>
+                    <ul className="text-sm text-slate-600 space-y-3">
+                      <li className="flex items-start space-x-3">
+                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-600 mt-1.5 shrink-0" />
+                        <span><span className="font-bold text-slate-900">Rapprochement intelligent :</span> L'application utilise le "Service User" pour trouver la prestation correspondante. Assurez-vous que les noms d'intervenants sont cohérents.</span>
+                      </li>
+                      <li className="flex items-start space-x-3">
+                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-600 mt-1.5 shrink-0" />
+                        <span><span className="font-bold text-slate-900">Noms de colonnes :</span> Si une colonne n'est pas détectée, essayez d'utiliser les termes exacts cités ci-dessus (en français ou anglais).</span>
+                      </li>
+                      <li className="flex items-start space-x-3">
+                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-600 mt-1.5 shrink-0" />
+                        <span><span className="font-bold text-slate-900">Sécurité :</span> Vos fichiers sont traités localement dans votre navigateur. Aucune donnée n'est envoyée sur un serveur externe.</span>
+                      </li>
+                    </ul>
+                  </section>
+                </div>
+
+                <div className="p-8 bg-slate-50 border-t border-slate-100 flex justify-center">
+                  <button 
+                    onClick={() => setShowFAQ(false)}
+                    className="px-12 py-4 bg-indigo-600 text-white font-black rounded-2xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
+                  >
+                    J'ai compris
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
 
         {/* Settings Modal */}
         <AnimatePresence>
