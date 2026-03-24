@@ -21,7 +21,8 @@ import {
   Package,
   Calculator,
   Archive,
-  Users
+  Users,
+  Check
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -97,6 +98,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [creditDuration, setCreditDuration] = useState(30);
+  const [detectedClients, setDetectedClients] = useState<string[]>([]);
+  const [selectedClients, setSelectedClients] = useState<Set<string>>(new Set());
 
   const getLastDaysOfMonths = () => {
     const dates = [];
@@ -308,6 +311,13 @@ export default function App() {
         }
 
         setBillingData(parsed);
+        const clients = Array.from(new Set(parsed.map(p => {
+          let name = p.clientName.trim();
+          if (!name && thirdPartyData.length > 0) name = thirdPartyData[0].name;
+          return name || "Client Inconnu";
+        })));
+        setDetectedClients(clients);
+        setSelectedClients(new Set(clients));
         setFilesUploaded(prev => ({ ...prev, billing: true }));
         setError(null);
       }
@@ -343,7 +353,14 @@ export default function App() {
       });
 
       // For each client, generate a PDF
-      const entries = Object.entries(groupedByClient);
+      const entries = Object.entries(groupedByClient).filter(([name]) => selectedClients.has(name));
+      
+      if (entries.length === 0) {
+        setError("Aucun client sélectionné pour la facturation.");
+        setProcessing(false);
+        return;
+      }
+
       for (const [clientName, lines] of entries) {
         const clientInfo = thirdPartyData.find(tp => 
           tp.name.toLowerCase().trim() === clientName.toLowerCase().trim() ||
@@ -666,6 +683,72 @@ export default function App() {
             description="Données d'activité"
           />
         </div>
+
+        {/* Client Selection Section */}
+        {detectedClients.length > 0 && (
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white rounded-[2rem] p-8 shadow-sm border border-slate-100 mb-8 card-shadow"
+          >
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h2 className="text-xl font-black text-slate-800">Clients détectés</h2>
+                <p className="text-sm text-slate-400 font-medium">Sélectionnez les clients à facturer</p>
+              </div>
+              <div className="flex items-center space-x-3">
+                <button 
+                  onClick={() => setSelectedClients(new Set(detectedClients))}
+                  className="text-xs font-black text-indigo-600 uppercase tracking-widest hover:text-indigo-700 transition-colors"
+                >
+                  Tout cocher
+                </button>
+                <div className="w-px h-3 bg-slate-200" />
+                <button 
+                  onClick={() => setSelectedClients(new Set())}
+                  className="text-xs font-black text-slate-400 uppercase tracking-widest hover:text-slate-500 transition-colors"
+                >
+                  Tout décocher
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {detectedClients.map(client => (
+                <label 
+                  key={client}
+                  className={cn(
+                    "flex items-center space-x-3 p-4 rounded-2xl border cursor-pointer transition-all duration-300",
+                    selectedClients.has(client) 
+                      ? "bg-indigo-50 border-indigo-100 text-indigo-700" 
+                      : "bg-white border-slate-100 text-slate-400 hover:border-slate-200"
+                  )}
+                >
+                  <div className={cn(
+                    "w-5 h-5 rounded-lg border-2 flex items-center justify-center transition-all",
+                    selectedClients.has(client)
+                      ? "bg-indigo-600 border-indigo-600"
+                      : "bg-white border-slate-200"
+                  )}>
+                    {selectedClients.has(client) && <Check className="w-3 h-3 text-white" />}
+                  </div>
+                  <input 
+                    type="checkbox"
+                    className="hidden"
+                    checked={selectedClients.has(client)}
+                    onChange={() => {
+                      const next = new Set(selectedClients);
+                      if (next.has(client)) next.delete(client);
+                      else next.add(client);
+                      setSelectedClients(next);
+                    }}
+                  />
+                  <span className="font-bold truncate">{client}</span>
+                </label>
+              ))}
+            </div>
+          </motion.div>
+        )}
 
         {/* Action Section */}
         <div className="bg-white rounded-[2rem] p-10 shadow-sm border border-slate-100 mb-12 card-shadow">
