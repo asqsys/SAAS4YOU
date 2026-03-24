@@ -89,7 +89,14 @@ export default function App() {
     name: "",
     address: "",
     email: "",
-    vat: ""
+    vat: "",
+    bankAccount1: "",
+    bankAccount2: ""
+  });
+
+  const [selectedBankAccounts, setSelectedBankAccounts] = useState({
+    account1: true,
+    account2: false
   });
 
   const [showSettings, setShowSettings] = useState(false);
@@ -150,6 +157,16 @@ export default function App() {
       localStorage.setItem('asqsys_machine_id', id);
     }
     return id;
+  };
+
+  const incrementReference = (ref: string) => {
+    const match = ref.match(/^(.*?)(\d+)$/);
+    if (!match) return ref + "-1";
+    const prefix = match[1];
+    const numberStr = match[2];
+    const nextNumber = parseInt(numberStr) + 1;
+    const nextNumberStr = nextNumber.toString().padStart(numberStr.length, '0');
+    return prefix + nextNumberStr;
   };
 
   const numberToWordsFR = (num: number) => {
@@ -242,11 +259,22 @@ export default function App() {
         const city = String(findValue(row, ['City', 'Ville']) || "");
         const country = String(findValue(row, ['Country', 'Pays']) || "");
         
+        const bank1 = String(findValue(row, ['Payment bank account 1', 'Bank 1', 'Compte 1']) || "");
+        const bank2 = String(findValue(row, ['Payment bank account 2', 'Bank 2', 'Compte 2']) || "");
+        
         setCompanyInfo({
           name,
           address: `${addr}${cp ? ', ' + cp : ''}${city ? ' ' + city : ''}${country ? ', ' + country : ''}`.trim() || "Adresse non renseignée",
           email: String(findValue(row, ['Email', 'Courriel']) || "contact@entreprise.com"),
-          vat: String(findValue(row, ['VAT ID', 'TVA', 'Numéro TVA', 'VAT']) || "Non renseigné")
+          vat: String(findValue(row, ['VAT ID', 'TVA', 'Numéro TVA', 'VAT']) || "Non renseigné"),
+          bankAccount1: bank1,
+          bankAccount2: bank2
+        });
+        
+        // Auto-select first bank account if available
+        setSelectedBankAccounts({
+          account1: !!bank1,
+          account2: false
         });
         setFilesUploaded(prev => ({ ...prev, company: true }));
         setError(null);
@@ -367,6 +395,13 @@ export default function App() {
       return;
     }
 
+    if (filesUploaded.company && (companyInfo.bankAccount1 || companyInfo.bankAccount2)) {
+      if (!selectedBankAccounts.account1 && !selectedBankAccounts.account2) {
+        setError("Veuillez sélectionner au moins un compte bancaire pour le paiement.");
+        return;
+      }
+    }
+
     setProcessing(true);
     try {
       // Group billing lines by client
@@ -393,6 +428,7 @@ export default function App() {
         return;
       }
 
+      let currentRef = invoiceReference;
       for (const [clientName, lines] of entries) {
         const clientInfo = thirdPartyData.find(tp => 
           tp.name.toLowerCase().trim() === clientName.toLowerCase().trim() ||
@@ -441,9 +477,11 @@ export default function App() {
           };
         });
 
-        await createPDF(clientInfo, invoiceLines);
+        await createPDF(clientInfo, invoiceLines, currentRef);
+        currentRef = incrementReference(currentRef);
       }
       
+      setInvoiceReference(currentRef);
       setError(null);
       setSuccessMessage(`Félicitations ! ${entries.length} factures ont été générées avec succès.`);
       setTimeout(() => setSuccessMessage(null), 5000);
@@ -455,7 +493,7 @@ export default function App() {
     }
   };
 
-  const createPDF = async (client: any, lines: any[]) => {
+  const createPDF = async (client: any, lines: any[], invoiceRef: string) => {
     const doc = new jsPDF() as any;
     
     const invoiceDate = new Date(selectedInvoiceDate);
@@ -482,7 +520,7 @@ export default function App() {
     const sourceSignature = sourceHash.substring(0, 12).toUpperCase();
 
     // Generate Integrity Hash (Now includes Source Signature)
-    const dataToHash = `INV:${invoiceReference}|DATE:${selectedInvoiceDate}|HT:${totalHT.toFixed(2)}|TVA:${tva.toFixed(2)}|TTC:${totalTTC.toFixed(2)}|QTY:${totalQty}|SRC:${sourceSignature}`;
+    const dataToHash = `INV:${invoiceRef}|DATE:${selectedInvoiceDate}|HT:${totalHT.toFixed(2)}|TVA:${tva.toFixed(2)}|TTC:${totalTTC.toFixed(2)}|QTY:${totalQty}|SRC:${sourceSignature}`;
     const encoder = new TextEncoder();
     const data = encoder.encode(dataToHash);
     const hashBuffer = await crypto.subtle.digest('SHA-256', data);
@@ -526,7 +564,7 @@ export default function App() {
       doc.setFontSize(10);
       doc.setTextColor(15, 23, 42);
       doc.setFont("helvetica", "bold");
-      doc.text(`Invoice Number: ${invoiceReference}`, 20, 25);
+      doc.text(`Invoice Number: ${invoiceRef}`, 20, 25);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(100, 116, 139);
       doc.text(`Invoice Date: ${formatDate(invoiceDate)}`, 20, 31);
@@ -658,7 +696,36 @@ export default function App() {
     doc.setFont("helvetica", "bolditalic");
     doc.text(`${numberToWordsFR(totalTTC)}`, 20, finalY + 52, { maxWidth: 170 });
 
-    doc.save(`Facture_${client.name.replace(/[^a-z0-9]/gi, '_')}.pdf`);
+    // Bank details
+    let currentY = finalY + 65;
+    const hasBankInfo = (selectedBankAccounts.account1 && companyInfo.bankAccount1) || (selectedBankAccounts.account2 && companyInfo.bankAccount2);
+    
+    if (hasBankInfo) {
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(15, 23, 42);
+      doc.text("Mode de paiement : Virement bancaire", 20, currentY);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(100, 116, 139);
+      
+      if (selectedBankAccounts.account1 && companyInfo.bankAccount1) {
+        doc.text(companyInfo.bankAccount1, 20, currentY + 5);
+        currentY += 8;
+      }
+      if (selectedBankAccounts.account2 && companyInfo.bankAccount2) {
+        doc.text(companyInfo.bankAccount2, 20, currentY + 5);
+        currentY += 8;
+      }
+
+      // Payment reference reminder
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "italic");
+      doc.setTextColor(79, 70, 229);
+      doc.text(`Merci de rappeler la référence de facture ${invoiceRef} lors de votre virement.`, 20, currentY + 5);
+    }
+
+    const fileName = `INV-${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, '0')}-ASQSYS-${client.name.replace(/[^a-z0-9]/gi, '_')}-${invoiceRef}.pdf`;
+    doc.save(fileName);
   };
 
   return (
@@ -813,7 +880,7 @@ export default function App() {
               </div>
               <div>
                 <label className="block text-[10px] font-black text-slate-400 mb-3 uppercase tracking-[0.2em] ml-1">
-                  Référence
+                  Réf. de départ
                 </label>
                 <input 
                   type="text"
@@ -835,6 +902,57 @@ export default function App() {
                 />
               </div>
             </div>
+
+            {/* Bank Account Selection */}
+            {filesUploaded.company && (companyInfo.bankAccount1 || companyInfo.bankAccount2) && (
+              <div className="w-full max-w-4xl">
+                <label className="block text-[10px] font-black text-slate-400 mb-3 uppercase tracking-[0.2em] ml-1">
+                  Comptes bancaires à afficher (Obligatoire)
+                </label>
+                <div className="flex flex-col sm:flex-row gap-4">
+                  {companyInfo.bankAccount1 && (
+                    <label className={cn(
+                      "flex-1 flex items-center space-x-3 p-4 rounded-2xl border cursor-pointer transition-all",
+                      selectedBankAccounts.account1 ? "bg-indigo-50 border-indigo-100 text-indigo-700" : "bg-slate-50 border-slate-100 text-slate-400"
+                    )}>
+                      <div className={cn(
+                        "w-5 h-5 rounded-lg border-2 flex items-center justify-center transition-all",
+                        selectedBankAccounts.account1 ? "bg-indigo-600 border-indigo-600" : "bg-white border-slate-200"
+                      )}>
+                        {selectedBankAccounts.account1 && <Check className="w-3 h-3 text-white" />}
+                      </div>
+                      <input 
+                        type="checkbox" 
+                        className="hidden"
+                        checked={selectedBankAccounts.account1}
+                        onChange={(e) => setSelectedBankAccounts(prev => ({ ...prev, account1: e.target.checked }))}
+                      />
+                      <span className="font-bold text-sm truncate">{companyInfo.bankAccount1}</span>
+                    </label>
+                  )}
+                  {companyInfo.bankAccount2 && (
+                    <label className={cn(
+                      "flex-1 flex items-center space-x-3 p-4 rounded-2xl border cursor-pointer transition-all",
+                      selectedBankAccounts.account2 ? "bg-indigo-50 border-indigo-100 text-indigo-700" : "bg-slate-50 border-slate-100 text-slate-400"
+                    )}>
+                      <div className={cn(
+                        "w-5 h-5 rounded-lg border-2 flex items-center justify-center transition-all",
+                        selectedBankAccounts.account2 ? "bg-indigo-600 border-indigo-600" : "bg-white border-slate-200"
+                      )}>
+                        {selectedBankAccounts.account2 && <Check className="w-3 h-3 text-white" />}
+                      </div>
+                      <input 
+                        type="checkbox" 
+                        className="hidden"
+                        checked={selectedBankAccounts.account2}
+                        onChange={(e) => setSelectedBankAccounts(prev => ({ ...prev, account2: e.target.checked }))}
+                      />
+                      <span className="font-bold text-sm truncate">{companyInfo.bankAccount2}</span>
+                    </label>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="flex items-center space-x-4 flex-wrap justify-center gap-y-4">
               <StatusBadge active={filesUploaded.company} label="Société" />
