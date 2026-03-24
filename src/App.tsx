@@ -120,6 +120,38 @@ export default function App() {
     return `${integerPart},${parts[1]} DH`;
   };
 
+  const getMachineFingerprint = () => {
+    try {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return 'NO-CANVAS';
+      
+      const txt = 'ASQSYS-VERIFY-1234567890-!@#$%^&*()';
+      ctx.textBaseline = "top";
+      ctx.font = "14px 'Arial'";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillStyle = "#f60";
+      ctx.fillRect(125,1,62,20);
+      ctx.fillStyle = "#069";
+      ctx.fillText(txt, 2, 15);
+      ctx.fillStyle = "rgba(102, 204, 0, 0.7)";
+      ctx.fillText(txt, 4, 17);
+      
+      return canvas.toDataURL().slice(-50); 
+    } catch (e) {
+      return 'FINGERPRINT-ERROR';
+    }
+  };
+
+  const getPersistentId = () => {
+    let id = localStorage.getItem('asqsys_machine_id');
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem('asqsys_machine_id', id);
+    }
+    return id;
+  };
+
   const numberToWordsFR = (num: number) => {
     const units = ['', 'un', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf'];
     const teens = ['dix', 'onze', 'douze', 'treize', 'quatorze', 'quinze', 'seize', 'dix-sept', 'dix-huit', 'dix-neuf'];
@@ -441,8 +473,16 @@ export default function App() {
 
     const period = `${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, '0')}`;
 
-    // Generate Integrity Hash
-    const dataToHash = `INV:${invoiceReference}|DATE:${selectedInvoiceDate}|HT:${totalHT.toFixed(2)}|TVA:${tva.toFixed(2)}|TTC:${totalTTC.toFixed(2)}|QTY:${totalQty}`;
+    // Source Signature (Machine ID + Hardware Fingerprint)
+    const machineId = getPersistentId();
+    const fingerprint = getMachineFingerprint();
+    const sourceData = `${machineId}|${fingerprint}|${navigator.userAgent}`;
+    const sourceBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sourceData));
+    const sourceHash = Array.from(new Uint8Array(sourceBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+    const sourceSignature = sourceHash.substring(0, 12).toUpperCase();
+
+    // Generate Integrity Hash (Now includes Source Signature)
+    const dataToHash = `INV:${invoiceReference}|DATE:${selectedInvoiceDate}|HT:${totalHT.toFixed(2)}|TVA:${tva.toFixed(2)}|TTC:${totalTTC.toFixed(2)}|QTY:${totalQty}|SRC:${sourceSignature}`;
     const encoder = new TextEncoder();
     const data = encoder.encode(dataToHash);
     const hashBuffer = await crypto.subtle.digest('SHA-256', data);
@@ -480,6 +520,7 @@ export default function App() {
       doc.setFontSize(6);
       doc.setTextColor(148, 163, 184);
       doc.text(`ID: ${shortHash}`, 190, 64, { align: 'right' });
+      doc.text(`SRC: ${sourceSignature}`, 190, 67, { align: 'right' });
 
       // Invoice Details - Top Left
       doc.setFontSize(10);
