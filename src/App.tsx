@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -35,6 +35,16 @@ function cn(...inputs: ClassValue[]) {
 }
 
 // --- Types ---
+
+interface Company {
+  id: string;
+  name: string;
+  address: string;
+  email: string;
+  vat: string;
+  bankAccount1: string;
+  bankAccount2: string;
+}
 
 interface ThirdParty {
   id: string;
@@ -87,14 +97,59 @@ export default function App() {
     company: false
   });
 
-  const [companyInfo, setCompanyInfo] = useState({
+  const [companies, setCompanies] = useState<Company[]>(() => {
+    const saved = localStorage.getItem('asqsys_companies');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(() => {
+    return localStorage.getItem('asqsys_selected_company_id');
+  });
+
+  // Derived selected company
+  const companyInfo = companies.find(c => c.id === selectedCompanyId) || {
+    id: "",
     name: "",
     address: "",
     email: "",
     vat: "",
     bankAccount1: "",
     bankAccount2: ""
-  });
+  };
+
+  useEffect(() => {
+    localStorage.setItem('asqsys_companies', JSON.stringify(companies));
+    // If no company selected but list not empty, select first
+    if (!selectedCompanyId && companies.length > 0) {
+      setSelectedCompanyId(companies[0].id);
+    }
+  }, [companies, selectedCompanyId]);
+
+  useEffect(() => {
+    if (selectedCompanyId) {
+      localStorage.setItem('asqsys_selected_company_id', selectedCompanyId);
+      setFilesUploaded(prev => ({ ...prev, company: true }));
+
+      // Ensure at least one valid bank account is selected for the new company
+      const company = companies.find(c => c.id === selectedCompanyId);
+      if (company) {
+        const hasAcc1 = !!company.bankAccount1;
+        const hasAcc2 = !!company.bankAccount2;
+        const isAcc1Valid = selectedBankAccounts.account1 && hasAcc1;
+        const isAcc2Valid = selectedBankAccounts.account2 && hasAcc2;
+        
+        if (!isAcc1Valid && !isAcc2Valid && (hasAcc1 || hasAcc2)) {
+          setSelectedBankAccounts({
+            account1: hasAcc1,
+            account2: !hasAcc1 && hasAcc2
+          });
+        }
+      }
+    } else {
+      localStorage.removeItem('asqsys_selected_company_id');
+      setFilesUploaded(prev => ({ ...prev, company: false }));
+    }
+  }, [selectedCompanyId, companies]);
 
   const [selectedBankAccounts, setSelectedBankAccounts] = useState({
     account1: true,
@@ -273,20 +328,34 @@ export default function App() {
         const bank1 = String(findValue(row, ['Payment bank account 1', 'Bank 1', 'Compte 1']) || "");
         const bank2 = String(findValue(row, ['Payment bank account 2', 'Bank 2', 'Compte 2']) || "");
         
-        setCompanyInfo({
+        const newCompany: Company = {
+          id: Date.now().toString(),
           name,
           address: `${addr}${cp ? ', ' + cp : ''}${city ? ' ' + city : ''}${country ? ', ' + country : ''}`.trim() || "Adresse non renseignée",
           email: String(findValue(row, ['Email', 'Courriel']) || "contact@entreprise.com"),
           vat: String(findValue(row, ['VAT ID', 'TVA', 'Numéro TVA', 'VAT']) || "Non renseigné"),
           bankAccount1: bank1,
           bankAccount2: bank2
+        };
+
+        setCompanies(prev => {
+          const existingIndex = prev.findIndex(c => c.name.toLowerCase() === name.toLowerCase());
+          let updatedCompanies;
+          let targetId;
+          
+          if (existingIndex >= 0) {
+            targetId = prev[existingIndex].id;
+            updatedCompanies = [...prev];
+            updatedCompanies[existingIndex] = { ...newCompany, id: targetId };
+          } else {
+            targetId = newCompany.id;
+            updatedCompanies = [...prev, newCompany];
+          }
+          
+          setSelectedCompanyId(targetId);
+          return updatedCompanies;
         });
-        
-        // Auto-select first bank account if available
-        setSelectedBankAccounts({
-          account1: !!bank1,
-          account2: false
-        });
+
         setFilesUploaded(prev => ({ ...prev, company: true }));
         setError(null);
       } else if (type === 'thirdParty') {
@@ -790,9 +859,10 @@ export default function App() {
             title="Ma Société" 
             icon={<Building2 className="w-5 h-5" />}
             uploaded={filesUploaded.company}
-            count={filesUploaded.company ? 1 : 0}
+            count={companies.length}
             onChange={(e) => handleFileUpload(e, 'company')}
             description="Infos émetteur"
+            unit="entités"
           />
           <FileCard 
             title="Clients" 
@@ -1323,72 +1393,207 @@ export default function App() {
         {/* Settings Modal */}
         <AnimatePresence>
           {showSettings && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 md:p-8">
               <motion.div 
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={() => setShowSettings(false)}
-                className="absolute inset-0 bg-black/20 backdrop-blur-sm"
+                className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
               />
               <motion.div 
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md p-8 overflow-hidden"
+                className="relative w-full max-w-2xl max-h-[90vh] bg-white rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col"
               >
-                <div className="flex items-center justify-between mb-8">
-                  <h2 className="text-2xl font-bold">Ma Société</h2>
-                  <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-gray-600">
-                    <AlertCircle className="w-6 h-6 rotate-45" />
+                <div className="p-8 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                  <div className="flex items-center space-x-4">
+                    <div className="p-3 bg-indigo-600 rounded-2xl">
+                      <Building2 className="w-6 h-6 text-white" />
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-900">Ma Société</h2>
+                      <p className="text-slate-500 font-medium">Gérez vos entités de facturation</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setShowSettings(false)}
+                    className="p-3 hover:bg-slate-100 rounded-2xl transition-colors"
+                  >
+                    <X className="w-6 h-6 text-slate-400" />
                   </button>
                 </div>
                 
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1 ml-1">Nom de l'entreprise</label>
-                    <input 
-                      type="text" 
-                      value={companyInfo.name}
-                      onChange={(e) => setCompanyInfo({...companyInfo, name: e.target.value})}
-                      className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1 ml-1">Adresse complète</label>
-                    <textarea 
-                      rows={2}
-                      value={companyInfo.address}
-                      onChange={(e) => setCompanyInfo({...companyInfo, address: e.target.value})}
-                      className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1 ml-1">Email de contact</label>
-                    <input 
-                      type="email" 
-                      value={companyInfo.email}
-                      onChange={(e) => setCompanyInfo({...companyInfo, email: e.target.value})}
-                      className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1 ml-1">N° de TVA</label>
-                    <input 
-                      type="text" 
-                      value={companyInfo.vat}
-                      onChange={(e) => setCompanyInfo({...companyInfo, vat: e.target.value})}
-                      className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                    />
-                  </div>
+                <div className="p-8 overflow-y-auto custom-scrollbar space-y-8">
+                  {/* Company Selection List */}
+                  <section>
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Vos Sociétés ({companies.length})</h3>
+                      <button 
+                        onClick={() => document.getElementById('company-upload-settings')?.click()}
+                        className="text-[10px] font-black text-indigo-600 uppercase tracking-widest hover:text-indigo-700 transition-colors flex items-center gap-1"
+                      >
+                        <Upload className="w-3 h-3" />
+                        Ajouter
+                      </button>
+                      <input 
+                        id="company-upload-settings"
+                        type="file"
+                        className="hidden"
+                        onChange={(e) => handleFileUpload(e, 'company')}
+                        accept=".xlsx,.xls"
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 gap-3">
+                      {companies.map((company) => (
+                        <div 
+                          key={company.id}
+                          onClick={() => setSelectedCompanyId(company.id)}
+                          className={cn(
+                            "group flex items-center justify-between p-5 rounded-2xl border-2 transition-all cursor-pointer",
+                            selectedCompanyId === company.id 
+                              ? "border-indigo-600 bg-indigo-50/50 shadow-lg shadow-indigo-100" 
+                              : "border-slate-100 hover:border-slate-200 bg-white"
+                          )}
+                        >
+                          <div className="flex items-center space-x-4">
+                            <div className={cn(
+                              "w-12 h-12 rounded-xl flex items-center justify-center font-black text-lg",
+                              selectedCompanyId === company.id ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-400"
+                            )}>
+                              {company.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="font-black text-slate-900">{company.name}</p>
+                              <p className="text-xs text-slate-500 font-medium truncate max-w-[200px]">{company.address}</p>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center space-x-2">
+                            {selectedCompanyId === company.id && (
+                              <div className="px-3 py-1 bg-indigo-600 text-white text-[10px] font-black rounded-full uppercase tracking-wider">Actif</div>
+                            )}
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (confirm(`Supprimer la société ${company.name} ?`)) {
+                                  setCompanies(prev => prev.filter(c => c.id !== company.id));
+                                  if (selectedCompanyId === company.id) setSelectedCompanyId(null);
+                                }
+                              }}
+                              className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      
+                      {companies.length === 0 && (
+                        <div className="text-center py-12 border-2 border-dashed border-slate-100 rounded-[2rem]">
+                          <Building2 className="w-12 h-12 text-slate-200 mx-auto mb-4" />
+                          <p className="text-slate-400 font-medium">Aucune société enregistrée.<br/>Importez un fichier Excel pour commencer.</p>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+
+                  {/* Selected Company Details (Editable) */}
+                  {selectedCompanyId && (
+                    <motion.section 
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="bg-slate-50 p-8 rounded-[2rem] border border-slate-100 space-y-6"
+                    >
+                      <h3 className="text-xs font-black text-indigo-600 uppercase tracking-widest">Détails de l'entité sélectionnée</h3>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider ml-1">Nom de l'entreprise</label>
+                          <input 
+                            type="text" 
+                            value={companyInfo.name}
+                            onChange={(e) => {
+                              const updated = companies.map(c => c.id === selectedCompanyId ? { ...c, name: e.target.value } : c);
+                              setCompanies(updated);
+                            }}
+                            className="w-full px-5 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold text-slate-700"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider ml-1">Email de contact</label>
+                          <input 
+                            type="email" 
+                            value={companyInfo.email}
+                            onChange={(e) => {
+                              const updated = companies.map(c => c.id === selectedCompanyId ? { ...c, email: e.target.value } : c);
+                              setCompanies(updated);
+                            }}
+                            className="w-full px-5 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold text-slate-700"
+                          />
+                        </div>
+                        <div className="col-span-full space-y-2">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider ml-1">Adresse complète</label>
+                          <textarea 
+                            rows={2}
+                            value={companyInfo.address}
+                            onChange={(e) => {
+                              const updated = companies.map(c => c.id === selectedCompanyId ? { ...c, address: e.target.value } : c);
+                              setCompanies(updated);
+                            }}
+                            className="w-full px-5 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold text-slate-700"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider ml-1">N° de TVA</label>
+                          <input 
+                            type="text" 
+                            value={companyInfo.vat}
+                            onChange={(e) => {
+                              const updated = companies.map(c => c.id === selectedCompanyId ? { ...c, vat: e.target.value } : c);
+                              setCompanies(updated);
+                            }}
+                            className="w-full px-5 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold text-slate-700"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="pt-4 border-t border-slate-200">
+                        <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-4">Comptes bancaires enregistrés</h4>
+                        <div className="space-y-3">
+                          {companyInfo.bankAccount1 && (
+                            <div className="p-4 bg-white rounded-xl border border-slate-100 flex items-center justify-between">
+                              <div className="flex items-center space-x-3">
+                                <Check className="w-4 h-4 text-emerald-500" />
+                                <span className="text-xs font-mono text-slate-600">{companyInfo.bankAccount1}</span>
+                              </div>
+                              <span className="text-[10px] font-black text-slate-300 uppercase">Compte 1</span>
+                            </div>
+                          )}
+                          {companyInfo.bankAccount2 && (
+                            <div className="p-4 bg-white rounded-xl border border-slate-100 flex items-center justify-between">
+                              <div className="flex items-center space-x-3">
+                                <Check className="w-4 h-4 text-emerald-500" />
+                                <span className="text-xs font-mono text-slate-600">{companyInfo.bankAccount2}</span>
+                              </div>
+                              <span className="text-[10px] font-black text-slate-300 uppercase">Compte 2</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </motion.section>
+                  )}
                 </div>
 
-                <button 
-                  onClick={() => setShowSettings(false)}
-                  className="w-full mt-8 py-4 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-100"
-                >
-                  Enregistrer
-                </button>
+                <div className="p-8 bg-slate-50 border-t border-slate-100 flex justify-center">
+                  <button 
+                    onClick={() => setShowSettings(false)}
+                    className="px-12 py-4 bg-indigo-600 text-white font-black rounded-2xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
+                  >
+                    Fermer
+                  </button>
+                </div>
               </motion.div>
             </div>
           )}
@@ -1419,13 +1624,14 @@ export default function App() {
 
 // --- Sub-components ---
 
-function FileCard({ title, icon, uploaded, count, onChange, description }: { 
+function FileCard({ title, icon, uploaded, count, onChange, description, unit = "lignes" }: { 
   title: string, 
   icon: React.ReactNode, 
   uploaded: boolean, 
   count: number,
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void,
-  description: string
+  description: string,
+  unit?: string
 }) {
   return (
     <div className={cn(
@@ -1442,7 +1648,7 @@ function FileCard({ title, icon, uploaded, count, onChange, description }: {
         {uploaded && (
           <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="flex flex-col items-end">
             <CheckCircle2 className="w-6 h-6 text-emerald-500" />
-            <span className="text-[10px] font-black text-emerald-600 mt-1 uppercase tracking-widest">{count} lignes</span>
+            <span className="text-[10px] font-black text-emerald-600 mt-1 uppercase tracking-widest">{count} {unit}</span>
           </motion.div>
         )}
       </div>
