@@ -59,15 +59,17 @@ interface Service {
   ref: string;
   description: string;
   matchKey: string; // prenom + premiere lettre nom
+  unitPrice?: number; // Added for the check
 }
 
 interface BillingLine {
   clientName: string;
   serviceUser: string; // The person name to match with service
-  amount: number;
   date: string;
   quantity: number;
-  unitPrice: number;
+  tjmAO: number;
+  tjmPortage: number;
+  amount: number; // Total HT from file
 }
 
 interface InvoiceData {
@@ -165,6 +167,8 @@ export default function App() {
   const [creditDuration, setCreditDuration] = useState(30);
   const [detectedClients, setDetectedClients] = useState<string[]>([]);
   const [selectedClients, setSelectedClients] = useState<Set<string>>(new Set());
+  const [billingOptions, setBillingOptions] = useState<Set<'GLOBAL' | 'RATE_A' | 'RATE_B'>>(new Set(['GLOBAL']));
+  const [invoiceNote, setInvoiceNote] = useState("");
 
   const getLastDaysOfMonths = () => {
     const dates = [];
@@ -383,15 +387,26 @@ export default function App() {
         setFilesUploaded(prev => ({ ...prev, thirdParty: true }));
         setError(null);
       } else if (type === 'services') {
+        const parseNum = (val: any) => {
+          if (typeof val === 'number') return val;
+          if (typeof val === 'string') {
+            const cleaned = val.replace(',', '.').replace(/[^-0-9.]/g, '');
+            return cleaned ? Number(cleaned) : 0;
+          }
+          return 0;
+        };
+
         const parsed = jsonData.map(row => {
           const id = String(findValue(row, ['ID', 'Ref.', 'Reference', 'Ref', 'Code']) || '');
           const ref = String(findValue(row, ['Ref.', 'Reference', 'Ref', 'Code', 'ID']) || '');
           const description = String(findValue(row, ['Label', 'Description', 'Service', 'Prestation', 'Libellé']) || '');
+          const unitPrice = parseNum(findValue(row, ['P.U. (excl.)', 'Unit price (excl.)', 'Prix Unitaire', 'PU', 'Taux', 'TJM', 'Prix', 'Tarif']));
           return {
             id,
             ref,
             description,
-            matchKey: ref.toUpperCase() 
+            matchKey: ref.toUpperCase(),
+            unitPrice: unitPrice || undefined
           };
         });
 
@@ -404,41 +419,32 @@ export default function App() {
         setFilesUploaded(prev => ({ ...prev, services: true }));
         setError(null);
       } else if (type === 'billing') {
-        const parsed = jsonData.map(row => {
-          const parseNum = (val: any) => {
-            if (typeof val === 'number') return val;
-            if (typeof val === 'string') {
-              const cleaned = val.replace(',', '.').replace(/[^-0-9.]/g, '');
-              return cleaned ? Number(cleaned) : 0;
-            }
-            return 0;
-          };
+        const parseNum = (val: any) => {
+          if (typeof val === 'number') return val;
+          if (typeof val === 'string') {
+            const cleaned = val.replace(',', '.').replace(/[^-0-9.]/g, '');
+            return cleaned ? Number(cleaned) : 0;
+          }
+          return 0;
+        };
 
+        const parsed = jsonData.map(row => {
           // Specific columns provided by user
-          const unitPrice = parseNum(findValue(row, ['P.U. (excl.)', 'TJM global', 'Unit price (excl.)', 'Prix Unitaire', 'PU', 'Taux', 'TJM']));
+          const tjmAO = parseNum(findValue(row, ['TJM A.O', 'TJM AO', 'AO']));
+          const tjmPortage = parseNum(findValue(row, ['TJM Portage', 'Portage']));
           const quantity = parseNum(findValue(row, ['Nbre Jours', 'Nbre de jours', 'Quantite', 'Nb', 'Heures', 'Jours', 'Qté']));
           const amount = parseNum(findValue(row, ['Total HT', 'Factures HT', 'Montant', 'Total', 'HT', 'Net']));
           
-          let finalUnitPrice = unitPrice;
-          let finalQuantity = quantity;
-          let finalAmount = amount;
-          
-          if (finalAmount === 0 && finalUnitPrice !== 0 && finalQuantity !== 0) {
-            finalAmount = finalUnitPrice * finalQuantity;
-          }
-          if (finalUnitPrice === 0 && finalAmount !== 0 && finalQuantity !== 0) {
-            finalUnitPrice = finalAmount / finalQuantity;
-          }
-
           return {
             clientName: String(findValue(row, ['Client', 'Entreprise', 'Société', 'Tiers']) || ''),
             serviceUser: String(findValue(row, ['Description', 'Consultant', 'Collaborateur', 'Nom', 'Prenom Nom', 'Salarié']) || ''),
-            amount: finalAmount,
+            amount: amount,
             date: String(findValue(row, ['Date', 'Commentaires', 'Période', 'Mois']) || ''),
-            quantity: finalQuantity,
-            unitPrice: finalUnitPrice
+            quantity: quantity,
+            tjmAO,
+            tjmPortage
           };
-        }).filter(row => row.serviceUser && row.quantity > 0 && row.unitPrice > 0);
+        }).filter(row => row.serviceUser && row.quantity > 0 && (row.tjmAO > 0 || row.tjmPortage > 0 || row.amount > 0));
         
         if (jsonData.length === 0) {
           setError(`Le fichier ${type} semble être vide.`);
@@ -446,7 +452,7 @@ export default function App() {
         }
 
         if (parsed.length === 0) {
-          setError("Aucune donnée valide trouvée dans le fichier de facturation. Vérifiez que les colonnes 'Unit price (excl.)' et 'Nbre de jours' sont bien remplies et contiennent des valeurs supérieures à 0.");
+          setError("Aucune donnée valide trouvée dans le fichier de facturation. Vérifiez que les colonnes 'TJM A.O', 'TJM Portage' ou 'Total HT' sont bien remplies.");
           return;
         }
 
@@ -484,6 +490,43 @@ export default function App() {
 
     setProcessing(true);
     try {
+      // 1. Validation check before anything else
+      const validationErrors: string[] = [];
+      
+      billingData.forEach(line => {
+        const nameParts = line.serviceUser.trim().split(/\s+/);
+        if (nameParts.length < 2) return;
+
+        const p1 = nameParts[0].toUpperCase();
+        const p2 = nameParts[nameParts.length - 1].toUpperCase();
+        const firstLetter = p2.charAt(0);
+        
+        // Match keys: Prename-FirstLetterOfName
+        const matchKey = `${p1}-${firstLetter}`;
+
+        // Check Rate A (AO)
+        if ((billingOptions.has('GLOBAL') || billingOptions.has('RATE_A')) && line.tjmAO > 0) {
+          const serviceAO = servicesData.find(s => s.ref.toUpperCase().includes('-AA-') && s.ref.toUpperCase().includes(matchKey));
+          if (serviceAO && serviceAO.unitPrice !== undefined && Math.abs(serviceAO.unitPrice - line.tjmAO) > 0.01) {
+            validationErrors.push(`Écart Tarif A (AO) pour ${line.serviceUser}: Facturation (${line.tjmAO} DH) vs Services (${serviceAO.unitPrice} DH)`);
+          }
+        }
+
+        // Check Rate B (Portage)
+        if ((billingOptions.has('GLOBAL') || billingOptions.has('RATE_B')) && line.tjmPortage > 0) {
+          const servicePortage = servicesData.find(s => s.ref.toUpperCase().includes('-PR-') && s.ref.toUpperCase().includes(matchKey));
+          if (servicePortage && servicePortage.unitPrice !== undefined && Math.abs(servicePortage.unitPrice - line.tjmPortage) > 0.01) {
+            validationErrors.push(`Écart Tarif B (Portage) pour ${line.serviceUser}: Facturation (${line.tjmPortage} DH) vs Services (${servicePortage.unitPrice} DH)`);
+          }
+        }
+      });
+
+      if (validationErrors.length > 0) {
+        setError(`Blocage de sécurité : Des écarts de tarifs ont été détectés.\n\n${validationErrors.join('\n')}`);
+        setProcessing(false);
+        return;
+      }
+
       // Group billing lines by client
       const groupedByClient: Record<string, BillingLine[]> = {};
       billingData.forEach(line => {
@@ -519,46 +562,54 @@ export default function App() {
           address: 'Adresse non trouvée'
         };
 
-        const invoiceLines = lines.map(line => {
+        const invoiceLines: any[] = [];
+
+        lines.forEach(line => {
           const nameParts = line.serviceUser.trim().split(/\s+/);
-          if (nameParts.length >= 2) {
-            const part1 = nameParts[0].toUpperCase();
-            const part2 = nameParts[nameParts.length - 1].toUpperCase();
-            const key1 = `${part1}-${part2.charAt(0)}`;
-            const key2 = `${part2}-${part1.charAt(0)}`;
-            
-            const foundService = servicesData.find(s => 
-              s.ref.toUpperCase().includes(key1) || 
-              s.ref.toUpperCase().includes(key2)
-            );
-            
-            if (foundService) {
-              return {
-                service: foundService,
-                quantity: line.quantity,
-                unitPrice: line.unitPrice,
-                total: line.amount,
-                date: line.date
-              };
-            }
+          const p1 = nameParts[0].toUpperCase();
+          const p2 = nameParts[nameParts.length - 1].toUpperCase();
+          const matchKey = `${p1}-${p2.charAt(0)}`;
+
+          // Add Rate A (AO) line
+          if ((billingOptions.has('GLOBAL') || billingOptions.has('RATE_A')) && line.tjmAO > 0) {
+            const serviceAO = servicesData.find(s => s.ref.toUpperCase().includes('-AA-') && s.ref.toUpperCase().includes(matchKey));
+            invoiceLines.push({
+              service: serviceAO || { id: 'AO-MIS', ref: 'AO-MIS', description: `Tarif A - ${line.serviceUser}` },
+              quantity: line.quantity,
+              unitPrice: line.tjmAO,
+              total: line.quantity * line.tjmAO,
+              date: line.date
+            });
           }
 
-          return {
-            service: {
-              id: 'ID-MANQUANT',
-              ref: 'REF-MANQUANTE',
-              description: `Prestation pour ${line.serviceUser}`,
-              matchKey: ''
-            },
-            quantity: line.quantity || 1,
-            unitPrice: line.unitPrice || (line.quantity ? line.amount / line.quantity : line.amount),
-            total: line.amount,
-            date: line.date
-          };
+          // Add Rate B (Portage) line
+          if ((billingOptions.has('GLOBAL') || billingOptions.has('RATE_B')) && line.tjmPortage > 0) {
+            const servicePortage = servicesData.find(s => s.ref.toUpperCase().includes('-PR-') && s.ref.toUpperCase().includes(matchKey));
+            invoiceLines.push({
+              service: servicePortage || { id: 'PR-MIS', ref: 'PR-MIS', description: `Tarif B - ${line.serviceUser}` },
+              quantity: line.quantity,
+              unitPrice: line.tjmPortage,
+              total: line.quantity * line.tjmPortage,
+              date: line.date
+            });
+          }
+
+          // Fallback if neither AO nor Portage but amount exists
+          if (invoiceLines.length === 0 && line.amount > 0) {
+             invoiceLines.push({
+              service: { id: 'MIS', ref: 'MIS', description: `Prestation - ${line.serviceUser}` },
+              quantity: line.quantity,
+              unitPrice: line.amount / line.quantity,
+              total: line.amount,
+              date: line.date
+            });
+          }
         });
 
-        await createPDF(clientInfo, invoiceLines, currentRef);
-        currentRef = incrementReference(currentRef);
+        if (invoiceLines.length > 0) {
+          await createPDF(clientInfo, invoiceLines, currentRef);
+          currentRef = incrementReference(currentRef);
+        }
       }
       
       setInvoiceReference(currentRef);
@@ -755,61 +806,108 @@ export default function App() {
 
     const finalY = (doc as any).lastAutoTable.finalY;
 
+    // Helper to check space and add page if needed
+    const checkSpace = (neededHeight: number, currentYPos: number) => {
+      if (currentYPos + neededHeight > 260) { // 260 is safe margin before footer line at 272
+        doc.addPage();
+        return 80; // Start below header
+      }
+      return currentYPos;
+    };
+
     // Totals Box
+    let currentY = checkSpace(50, finalY);
     const boxWidth = 70;
     const startX = 190 - boxWidth;
     
     doc.setFontSize(10);
     doc.setTextColor(100, 116, 139); // Slate 500
-    doc.text(`Total HT:`, startX, finalY + 15);
-    doc.text(formatDH(totalHT), 190, finalY + 15, { align: 'right' });
+    doc.text(`Total HT:`, startX, currentY + 15);
+    doc.text(formatDH(totalHT), 190, currentY + 15, { align: 'right' });
     
-    doc.text(`TVA (20%):`, startX, finalY + 22);
-    doc.text(formatDH(tva), 190, finalY + 22, { align: 'right' });
+    doc.text(`TVA (20%):`, startX, currentY + 22);
+    doc.text(formatDH(tva), 190, currentY + 22, { align: 'right' });
     
     doc.setDrawColor(79, 70, 229); // Indigo 600
     doc.setLineWidth(0.5);
-    doc.line(startX, finalY + 26, 190, finalY + 26);
+    doc.line(startX, currentY + 26, 190, currentY + 26);
     
     doc.setFont("helvetica", "bold");
     doc.setFontSize(12);
     doc.setTextColor(15, 23, 42); // Slate 900
-    doc.text(`TOTAL TTC:`, startX, finalY + 33);
-    doc.text(formatDH(totalTTC), 190, finalY + 33, { align: 'right' });
+    doc.text(`TOTAL TTC:`, startX, currentY + 33);
+    doc.text(formatDH(totalTTC), 190, currentY + 33, { align: 'right' });
 
     // Amount in words
-    doc.setFontSize(9);
+    currentY = checkSpace(30, currentY + 40);
+    doc.setFillColor(248, 250, 252); // Slate 50
+    doc.roundedRect(15, currentY, 180, 20, 3, 3, 'F');
+    doc.setFontSize(8);
+    doc.setTextColor(100, 116, 139); // Slate 500
     doc.setFont("helvetica", "italic");
-    doc.text(`Arrêté la présente facture à la somme de :`, 20, finalY + 45);
+    doc.text(`Arrêté la présente facture à la somme de :`, 20, currentY + 7);
     doc.setFont("helvetica", "bolditalic");
-    doc.text(`${numberToWordsFR(totalTTC)}`, 20, finalY + 52, { maxWidth: 170 });
+    doc.setTextColor(15, 23, 42); // Slate 900
+    doc.text(`${numberToWordsFR(totalTTC)}`, 20, currentY + 14, { maxWidth: 170 });
 
-    // Bank details
-    let currentY = finalY + 65;
+    currentY += 30;
+
+    // Note Section
+    if (invoiceNote.trim()) {
+      const noteLines = doc.splitTextToSize(`Note : ${invoiceNote}`, 170);
+      const noteHeight = (noteLines.length * 5) + 8;
+      
+      currentY = checkSpace(noteHeight + 10, currentY);
+      
+      doc.setFillColor(255, 251, 235); // Amber 50
+      doc.setDrawColor(251, 191, 36); // Amber 400
+      doc.setLineWidth(0.1);
+      
+      doc.roundedRect(15, currentY, 180, noteHeight, 2, 2, 'FD');
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(146, 64, 14); // Amber 800
+      doc.text(noteLines, 20, currentY + 6);
+      currentY += noteHeight + 10;
+    }
+
+    // Bank details & Reference
     const hasBankInfo = (selectedBankAccounts.account1 && companyInfo.bankAccount1) || (selectedBankAccounts.account2 && companyInfo.bankAccount2);
     
     if (hasBankInfo) {
-      doc.setFontSize(8);
+      currentY = checkSpace(45, currentY);
+      
+      doc.setFillColor(241, 245, 249); // Slate 100
+      doc.roundedRect(15, currentY, 180, 35, 3, 3, 'F');
+      
+      doc.setFontSize(9);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(15, 23, 42);
-      doc.text("Mode de paiement : Virement bancaire", 20, currentY);
+      doc.text("MODE DE PAIEMENT", 20, currentY + 8);
+      
+      doc.setFontSize(8);
       doc.setFont("helvetica", "normal");
-      doc.setTextColor(100, 116, 139);
+      doc.setTextColor(71, 85, 105); // Slate 600
+      doc.text("Virement bancaire vers :", 20, currentY + 14);
+      
+      let bankY = currentY + 20;
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(15, 23, 42);
       
       if (selectedBankAccounts.account1 && companyInfo.bankAccount1) {
-        doc.text(companyInfo.bankAccount1, 20, currentY + 5);
-        currentY += 8;
+        doc.text(companyInfo.bankAccount1, 20, bankY);
+        bankY += 5;
       }
       if (selectedBankAccounts.account2 && companyInfo.bankAccount2) {
-        doc.text(companyInfo.bankAccount2, 20, currentY + 5);
-        currentY += 8;
+        doc.text(companyInfo.bankAccount2, 20, bankY);
+        bankY += 5;
       }
 
       // Payment reference reminder
       doc.setFontSize(8);
-      doc.setFont("helvetica", "italic");
-      doc.setTextColor(79, 70, 229);
-      doc.text(`Merci de rappeler la référence de facture ${invoiceRef} lors de votre virement.`, 20, currentY + 5);
+      doc.setFont("helvetica", "bolditalic");
+      doc.setTextColor(79, 70, 229); // Indigo 600
+      doc.text(`IMPORTANT : Merci de rappeler la référence ${invoiceRef} lors de votre virement.`, 20, currentY + 30);
     }
 
     const fileName = `INV-${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, '0')}-ASQSYS-${client.name.replace(/[^a-z0-9]/gi, '_')}-${invoiceRef}.pdf`;
@@ -959,7 +1057,7 @@ export default function App() {
         {/* Action Section */}
         <div className="bg-white rounded-[2rem] p-10 shadow-sm border border-slate-100 mb-12 card-shadow">
           <div className="flex flex-col items-center justify-center space-y-8">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-8 w-full max-w-4xl">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 w-full max-w-5xl">
               <div>
                 <label className="block text-[10px] font-black text-slate-400 mb-3 uppercase tracking-[0.2em] ml-1">
                   Date de facturation
@@ -988,6 +1086,100 @@ export default function App() {
                   className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all"
                 />
               </div>
+              <div className="lg:col-span-2">
+                <label className="block text-[10px] font-black text-slate-400 mb-3 uppercase tracking-[0.2em] ml-1">
+                  Type de facturation (Mode d'application des tarifs)
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <label className={cn(
+                    "flex items-center space-x-3 p-4 rounded-2xl border cursor-pointer transition-all",
+                    billingOptions.has('GLOBAL') ? "bg-indigo-50 border-indigo-200 text-indigo-700" : "bg-slate-50 border-slate-100 text-slate-400 hover:border-slate-200"
+                  )}>
+                    <input 
+                      type="checkbox" 
+                      className="hidden"
+                      checked={billingOptions.has('GLOBAL')}
+                      onChange={() => {
+                        setBillingOptions(new Set(['GLOBAL']));
+                      }}
+                    />
+                    <div className={cn(
+                      "w-5 h-5 rounded-lg border-2 flex items-center justify-center transition-all",
+                      billingOptions.has('GLOBAL') ? "bg-indigo-600 border-indigo-600" : "bg-white border-slate-200"
+                    )}>
+                      {billingOptions.has('GLOBAL') && <Check className="w-3 h-3 text-white" />}
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="font-bold text-xs">Mode Global</span>
+                      <span className="text-[9px] opacity-70">Consolidé (ex: TJM Global, Package)</span>
+                    </div>
+                  </label>
+
+                  <label className={cn(
+                    "flex items-center space-x-3 p-4 rounded-2xl border cursor-pointer transition-all",
+                    billingOptions.has('RATE_A') ? "bg-indigo-50 border-indigo-200 text-indigo-700" : "bg-slate-50 border-slate-100 text-slate-400 hover:border-slate-200"
+                  )}>
+                    <input 
+                      type="checkbox" 
+                      className="hidden"
+                      checked={billingOptions.has('RATE_A')}
+                      onChange={() => {
+                        const next = new Set(billingOptions);
+                        next.delete('GLOBAL');
+                        if (next.has('RATE_A')) {
+                          next.delete('RATE_A');
+                          if (next.size === 0) next.add('GLOBAL');
+                        } else {
+                          next.add('RATE_A');
+                        }
+                        setBillingOptions(next);
+                      }}
+                    />
+                    <div className={cn(
+                      "w-5 h-5 rounded-lg border-2 flex items-center justify-center transition-all",
+                      billingOptions.has('RATE_A') ? "bg-indigo-600 border-indigo-600" : "bg-white border-slate-200"
+                    )}>
+                      {billingOptions.has('RATE_A') && <Check className="w-3 h-3 text-white" />}
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="font-bold text-xs">Tarif Type A</span>
+                      <span className="text-[9px] opacity-70">ex: TJM A.O, Prix VIP, Vente</span>
+                    </div>
+                  </label>
+
+                  <label className={cn(
+                    "flex items-center space-x-3 p-4 rounded-2xl border cursor-pointer transition-all",
+                    billingOptions.has('RATE_B') ? "bg-indigo-50 border-indigo-200 text-indigo-700" : "bg-slate-50 border-slate-100 text-slate-400 hover:border-slate-200"
+                  )}>
+                    <input 
+                      type="checkbox" 
+                      className="hidden"
+                      checked={billingOptions.has('RATE_B')}
+                      onChange={() => {
+                        const next = new Set(billingOptions);
+                        next.delete('GLOBAL');
+                        if (next.has('RATE_B')) {
+                          next.delete('RATE_B');
+                          if (next.size === 0) next.add('GLOBAL');
+                        } else {
+                          next.add('RATE_B');
+                        }
+                        setBillingOptions(next);
+                      }}
+                    />
+                    <div className={cn(
+                      "w-5 h-5 rounded-lg border-2 flex items-center justify-center transition-all",
+                      billingOptions.has('RATE_B') ? "bg-indigo-600 border-indigo-600" : "bg-white border-slate-200"
+                    )}>
+                      {billingOptions.has('RATE_B') && <Check className="w-3 h-3 text-white" />}
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="font-bold text-xs">Tarif Type B</span>
+                      <span className="text-[9px] opacity-70">ex: TJM Portage, Normal, Achat</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
               <div>
                 <label className="block text-[10px] font-black text-slate-400 mb-3 uppercase tracking-[0.2em] ml-1">
                   Durée crédit (jours)
@@ -997,6 +1189,17 @@ export default function App() {
                   value={creditDuration}
                   onChange={(e) => setCreditDuration(parseInt(e.target.value) || 0)}
                   className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all"
+                />
+              </div>
+              <div className="sm:col-span-3">
+                <label className="block text-[10px] font-black text-slate-400 mb-3 uppercase tracking-[0.2em] ml-1">
+                  Note (Optionnel - Apparaît sur la facture)
+                </label>
+                <textarea 
+                  value={invoiceNote}
+                  onChange={(e) => setInvoiceNote(e.target.value)}
+                  placeholder="Notes explicatives pour le comptable ou précisions sur la prestation..."
+                  className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-medium text-slate-700 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all resize-none h-24"
                 />
               </div>
             </div>
@@ -1131,10 +1334,9 @@ export default function App() {
                     <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px]">Client</th>
                     <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px]">Collaborateur</th>
                     <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px] text-right">Nbre Jours</th>
-                    <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px] text-right">P.U. (excl.)</th>
+                    <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px] text-right">TJM A.O</th>
+                    <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px] text-right">TJM Portage</th>
                     <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px] text-right">Total HT</th>
-                    <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px] text-right">TVA 20%</th>
-                    <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px] text-right">Montant TTC</th>
                     <th className="pb-4 font-bold text-slate-400 uppercase tracking-wider text-[10px] text-center">Match</th>
                   </tr>
                 </thead>
@@ -1145,20 +1347,18 @@ export default function App() {
                     if (nameParts.length >= 2) {
                       const p1 = nameParts[0].toUpperCase();
                       const p2 = nameParts[nameParts.length - 1].toUpperCase();
-                      isMatched = servicesData.some(s => 
-                        s.ref.toUpperCase().includes(`${p1}-${p2.charAt(0)}`) || 
-                        s.ref.toUpperCase().includes(`${p2}-${p1.charAt(0)}`)
-                      );
+                      const key = `${p1}-${p2.charAt(0)}`;
+                      isMatched = servicesData.some(s => s.ref.toUpperCase().includes(key));
                     }
+                    const totalHT = line.amount || (line.quantity * (line.tjmAO + line.tjmPortage));
                     return (
                       <tr key={i} className="hover:bg-gray-50/50 transition-colors">
                         <td className="py-4 font-bold text-indigo-600">{line.clientName}</td>
                         <td className="py-4 text-slate-600 font-medium">{line.serviceUser}</td>
                         <td className="py-4 text-right font-mono text-slate-500">{line.quantity}</td>
-                        <td className="py-4 text-right font-mono text-slate-500">{formatDH(line.unitPrice)}</td>
-                        <td className="py-4 text-right font-bold text-slate-700">{formatDH(line.amount)}</td>
-                        <td className="py-4 text-right text-slate-400">{formatDH(line.amount * 0.20)}</td>
-                        <td className="py-4 text-right font-bold text-indigo-600">{formatDH(line.amount * 1.20)}</td>
+                        <td className="py-4 text-right font-mono text-slate-500">{formatDH(line.tjmAO)}</td>
+                        <td className="py-4 text-right font-mono text-slate-500">{formatDH(line.tjmPortage)}</td>
+                        <td className="py-4 text-right font-bold text-slate-700">{formatDH(totalHT)}</td>
                         <td className="py-4 text-center">
                           {isMatched ? (
                             <span className="px-2 py-1 bg-green-50 text-green-600 rounded-full text-[10px] font-bold uppercase tracking-wider">OK</span>
@@ -1198,6 +1398,7 @@ export default function App() {
                     <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs">ID (Facture)</th>
                     <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs">Réf. (Liaison)</th>
                     <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs">Description</th>
+                    <th className="pb-4 font-bold text-gray-400 uppercase tracking-wider text-xs text-right">TJM (Services)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
@@ -1209,6 +1410,7 @@ export default function App() {
                         <td className="py-4 font-mono text-blue-600 text-xs">{service.id}</td>
                         <td className="py-4 font-mono text-gray-500 text-xs">{service.ref}</td>
                         <td className="py-4 text-gray-600">{service.description} {period}</td>
+                        <td className="py-4 text-right font-mono text-slate-500">{service.unitPrice ? formatDH(service.unitPrice) : '-'}</td>
                       </tr>
                     );
                   })}
@@ -1342,18 +1544,28 @@ export default function App() {
                         <p className="text-xs font-black text-indigo-200 uppercase tracking-wider">Colonnes de calcul</p>
                         <ul className="text-sm space-y-2">
                           <li>• <span className="font-bold">Nbre de jours / Quantity</span> : Quantité (ex: 15)</li>
-                          <li>• <span className="font-bold">Unit price (excl.)</span> : Prix unitaire Hors Taxe</li>
-                          <li>• <span className="font-bold">Amount / Montant</span> : Total ligne (si prix unitaire absent)</li>
+                          <li>• <span className="font-bold">TJM A.O</span> : Tarif Journalier Moyen A.O</li>
+                          <li>• <span className="font-bold">TJM Portage</span> : Tarif Journalier Moyen Portage</li>
+                          <li>• <span className="font-bold">Total HT / Amount</span> : Montant total de la ligne</li>
                         </ul>
                       </div>
                       <div className="space-y-3">
                         <p className="text-xs font-black text-indigo-200 uppercase tracking-wider">Colonnes de liaison</p>
                         <ul className="text-sm space-y-2">
                           <li>• <span className="font-bold">Client Name</span> : Doit correspondre au nom dans le fichier Tiers.</li>
-                          <li>• <span className="font-bold">Service User</span> : Nom de l'intervenant ou du service.</li>
+                          <li>• <span className="font-bold">Service User</span> : Nom de l'intervenant (ex: NAOUAR M).</li>
                           <li>• <span className="font-bold">Date</span> : Date de la prestation.</li>
                         </ul>
                       </div>
+                    </div>
+                    <div className="mt-6 p-4 bg-white/10 rounded-xl border border-white/20">
+                      <p className="text-xs font-bold mb-2 uppercase tracking-widest opacity-80">Règle de matching</p>
+                      <p className="text-sm leading-relaxed">
+                        L'application cherche dans le fichier <span className="font-bold underline">Services</span> une référence contenant :<br/>
+                        1. <span className="font-bold">-AA-</span> pour le TJM A.O<br/>
+                        2. <span className="font-bold">-PR-</span> pour le TJM Portage<br/>
+                        3. Le code intervenant (ex: <span className="font-bold">NAOUAR-M</span>)
+                      </p>
                     </div>
                   </section>
 
