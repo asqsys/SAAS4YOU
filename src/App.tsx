@@ -169,6 +169,7 @@ export default function App() {
   const [selectedClients, setSelectedClients] = useState<Set<string>>(new Set());
   const [billingOptions, setBillingOptions] = useState<Set<'GLOBAL' | 'RATE_A' | 'RATE_B'>>(new Set(['GLOBAL']));
   const [invoiceNote, setInvoiceNote] = useState("");
+  const [invoicePeriod, setInvoicePeriod] = useState("");
 
   const getLastDaysOfMonths = () => {
     const dates = [];
@@ -182,6 +183,14 @@ export default function App() {
 
   const [selectedInvoiceDate, setSelectedInvoiceDate] = useState(getLastDaysOfMonths()[6] || new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().split('T')[0]);
   const [invoiceReference, setInvoiceReference] = useState(`FAC-${Date.now().toString().slice(-6)}`);
+
+  useEffect(() => {
+    if (selectedInvoiceDate) {
+      const date = new Date(selectedInvoiceDate);
+      const period = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      setInvoicePeriod(period);
+    }
+  }, [selectedInvoiceDate]);
 
   const formatDH = (num: number) => {
     const parts = num.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).split(',');
@@ -640,7 +649,7 @@ export default function App() {
     const totalTTC = totalHT + tva;
     const totalQty = lines.reduce((sum, l) => sum + l.quantity, 0);
 
-    const period = `${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, '0')}`;
+    const period = invoicePeriod || `${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, '0')}`;
 
     // Source Signature (Machine ID + Hardware Fingerprint)
     const machineId = getPersistentId();
@@ -838,76 +847,90 @@ export default function App() {
     doc.text(`TOTAL TTC:`, startX, currentY + 33);
     doc.text(formatDH(totalTTC), 190, currentY + 33, { align: 'right' });
 
-    // Amount in words
-    currentY = checkSpace(30, currentY + 40);
+    // Move currentY to after the Totals Box
+    currentY += 40;
+
+    // --- OPTIMIZED FOOTER BLOCKS (Grouped to prevent splitting) ---
+    const footerPadding = 4;
+    const amountInWordsHeight = 14;
+    
+    // Calculate Bank height
+    const hasBankInfo = (selectedBankAccounts.account1 && companyInfo.bankAccount1) || (selectedBankAccounts.account2 && companyInfo.bankAccount2);
+    const hasNote = invoiceNote.trim().length > 0;
+    const noteWidth = hasNote && hasBankInfo ? 100 : 180;
+    const noteLines = hasNote ? doc.splitTextToSize(`Note : ${invoiceNote}`, noteWidth - 10) : [];
+    const noteHeight = hasNote ? (noteLines.length * 4) + 8 : 0;
+
+    const bankWidth = hasNote ? 75 : 180;
+    const bankAccountCount = (selectedBankAccounts.account1 && companyInfo.bankAccount1 ? 1 : 0) + (selectedBankAccounts.account2 && companyInfo.bankAccount2 ? 1 : 0);
+    const bankHeight = hasBankInfo ? 22 + (bankAccountCount * 5) : 0;
+
+    const footerGroupHeight = amountInWordsHeight + 5 + Math.max(noteHeight, bankHeight);
+    
+    // Ensure the entire block fits on the same page
+    currentY = checkSpace(footerGroupHeight + 10, currentY);
+
+    // 1. Amount in Words (Full Width, Compact)
     doc.setFillColor(248, 250, 252); // Slate 50
-    doc.roundedRect(15, currentY, 180, 20, 3, 3, 'F');
-    doc.setFontSize(8);
+    doc.roundedRect(15, currentY, 180, amountInWordsHeight, 2, 2, 'F');
+    doc.setFontSize(7.5);
     doc.setTextColor(100, 116, 139); // Slate 500
     doc.setFont("helvetica", "italic");
-    doc.text(`Arrêté la présente facture à la somme de :`, 20, currentY + 7);
+    doc.text(`Arrêté la présente facture à la somme de :`, 20, currentY + 5);
     doc.setFont("helvetica", "bolditalic");
     doc.setTextColor(15, 23, 42); // Slate 900
-    doc.text(`${numberToWordsFR(totalTTC)}`, 20, currentY + 14, { maxWidth: 170 });
+    doc.text(`${numberToWordsFR(totalTTC)}`, 20, currentY + 10, { maxWidth: 170 });
 
-    currentY += 30;
+    currentY += amountInWordsHeight + 4;
 
-    // Note Section
-    if (invoiceNote.trim()) {
-      const noteLines = doc.splitTextToSize(`Note : ${invoiceNote}`, 170);
-      const noteHeight = (noteLines.length * 5) + 8;
-      
-      currentY = checkSpace(noteHeight + 10, currentY);
-      
+    // 2. Side-by-Side: Note & Bank Details
+    const startY = currentY;
+
+    if (hasNote) {
       doc.setFillColor(255, 251, 235); // Amber 50
       doc.setDrawColor(251, 191, 36); // Amber 400
       doc.setLineWidth(0.1);
+      doc.roundedRect(15, startY, noteWidth, noteHeight, 2, 2, 'FD');
       
-      doc.roundedRect(15, currentY, 180, noteHeight, 2, 2, 'FD');
-      doc.setFontSize(8);
+      doc.setFontSize(7.5);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(146, 64, 14); // Amber 800
-      doc.text(noteLines, 20, currentY + 6);
-      currentY += noteHeight + 10;
+      doc.text(noteLines, 20, startY + 6);
     }
 
-    // Bank details & Reference
-    const hasBankInfo = (selectedBankAccounts.account1 && companyInfo.bankAccount1) || (selectedBankAccounts.account2 && companyInfo.bankAccount2);
-    
     if (hasBankInfo) {
-      currentY = checkSpace(45, currentY);
-      
+      const bankX = hasNote ? 15 + noteWidth + 5 : 15;
       doc.setFillColor(241, 245, 249); // Slate 100
-      doc.roundedRect(15, currentY, 180, 35, 3, 3, 'F');
-      
-      doc.setFontSize(9);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(15, 23, 42);
-      doc.text("MODE DE PAIEMENT", 20, currentY + 8);
+      doc.roundedRect(bankX, startY, bankWidth, bankHeight, 2, 2, 'F');
       
       doc.setFontSize(8);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(15, 23, 42);
+      doc.text("MODE DE PAIEMENT", bankX + 5, startY + 6);
+      
+      doc.setFontSize(7);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(71, 85, 105); // Slate 600
-      doc.text("Virement bancaire vers :", 20, currentY + 14);
+      doc.text("Virement bancaire vers :", bankX + 5, startY + 11);
       
-      let bankY = currentY + 20;
+      let bankY = startY + 16;
       doc.setFont("helvetica", "bold");
       doc.setTextColor(15, 23, 42);
       
       if (selectedBankAccounts.account1 && companyInfo.bankAccount1) {
-        doc.text(companyInfo.bankAccount1, 20, bankY);
+        doc.text(companyInfo.bankAccount1, bankX + 5, bankY);
         bankY += 5;
       }
       if (selectedBankAccounts.account2 && companyInfo.bankAccount2) {
-        doc.text(companyInfo.bankAccount2, 20, bankY);
+        doc.text(companyInfo.bankAccount2, bankX + 5, bankY);
         bankY += 5;
       }
 
-      // Payment reference reminder
-      doc.setFontSize(8);
+      // Payment reference reminder (Integrated into bank box)
+      doc.setFontSize(7);
       doc.setFont("helvetica", "bolditalic");
       doc.setTextColor(79, 70, 229); // Indigo 600
-      doc.text(`IMPORTANT : Merci de rappeler la référence ${invoiceRef} lors de votre virement.`, 20, currentY + 30);
+      doc.text(`IMPORTANT : Rappeler la réf. ${invoiceRef}`, bankX + 5, bankY + 2);
     }
 
     const fileName = `INV-${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, '0')}-ASQSYS-${client.name.replace(/[^a-z0-9]/gi, '_')}-${invoiceRef}.pdf`;
@@ -1057,7 +1080,7 @@ export default function App() {
         {/* Action Section */}
         <div className="bg-white rounded-[2rem] p-10 shadow-sm border border-slate-100 mb-12 card-shadow">
           <div className="flex flex-col items-center justify-center space-y-8">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 w-full max-w-5xl">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-8 w-full max-w-6xl">
               <div>
                 <label className="block text-[10px] font-black text-slate-400 mb-3 uppercase tracking-[0.2em] ml-1">
                   Date de facturation
@@ -1073,6 +1096,18 @@ export default function App() {
                     </option>
                   ))}
                 </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 mb-3 uppercase tracking-[0.2em] ml-1">
+                  Période (Libellé)
+                </label>
+                <input 
+                  type="text"
+                  value={invoicePeriod}
+                  onChange={(e) => setInvoicePeriod(e.target.value)}
+                  placeholder="Ex: 2026-01"
+                  className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all"
+                />
               </div>
               <div>
                 <label className="block text-[10px] font-black text-slate-400 mb-3 uppercase tracking-[0.2em] ml-1">
@@ -1403,13 +1438,11 @@ export default function App() {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {servicesData.slice(0, 5).map((service, i) => {
-                    const invoiceDate = new Date(selectedInvoiceDate);
-                    const period = `${invoiceDate.getFullYear()}-${String(invoiceDate.getMonth() + 1).padStart(2, '0')}`;
                     return (
                       <tr key={i} className="hover:bg-gray-50/50 transition-colors">
                         <td className="py-4 font-mono text-blue-600 text-xs">{service.id}</td>
                         <td className="py-4 font-mono text-gray-500 text-xs">{service.ref}</td>
-                        <td className="py-4 text-gray-600">{service.description} {period}</td>
+                        <td className="py-4 text-gray-600">{service.description} {invoicePeriod}</td>
                         <td className="py-4 text-right font-mono text-slate-500">{service.unitPrice ? formatDH(service.unitPrice) : '-'}</td>
                       </tr>
                     );
