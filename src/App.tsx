@@ -42,6 +42,7 @@ interface Company {
   address: string;
   email: string;
   vat: string;
+  ice: string;
   bankAccount1: string;
   bankAccount2: string;
 }
@@ -52,6 +53,7 @@ interface ThirdParty {
   address?: string;
   email?: string;
   vatNumber?: string;
+  ice?: string;
 }
 
 interface Service {
@@ -115,6 +117,7 @@ export default function App() {
     address: "",
     email: "",
     vat: "",
+    ice: "",
     bankAccount1: "",
     bankAccount2: ""
   };
@@ -341,12 +344,15 @@ export default function App() {
         const bank1 = String(findValue(row, ['Payment bank account 1', 'Bank 1', 'Compte 1']) || "");
         const bank2 = String(findValue(row, ['Payment bank account 2', 'Bank 2', 'Compte 2']) || "");
         
+        const ice = String(findValue(row, ['ICE', 'Identifiant Commun Entreprise']) || "");
+        
         const newCompany: Company = {
           id: Date.now().toString(),
           name,
           address: `${addr}${cp ? ', ' + cp : ''}${city ? ' ' + city : ''}${country ? ', ' + country : ''}`.trim() || "Adresse non renseignée",
           email: String(findValue(row, ['Email', 'Courriel']) || "contact@entreprise.com"),
           vat: String(findValue(row, ['VAT ID', 'TVA', 'Numéro TVA', 'VAT']) || "Non renseigné"),
+          ice,
           bankAccount1: bank1,
           bankAccount2: bank2
         };
@@ -383,7 +389,8 @@ export default function App() {
             name: String(findValue(row, ['Name', 'Nom', 'Client', 'Entreprise', 'Société']) || ''),
             address: `${addr}${cp ? ', ' + cp : ''}${city ? ' ' + city : ''}${country ? ', ' + country : ''}`.trim(),
             email: String(findValue(row, ['Email', 'Courriel']) || ''),
-            vatNumber: String(findValue(row, ['VAT ID', 'VAT', 'TVA', 'N° TVA']) || '')
+            vatNumber: String(findValue(row, ['VAT ID', 'VAT', 'TVA', 'N° TVA']) || ''),
+            ice: String(findValue(row, ['ICE', 'Identifiant Commun Entreprise']) || '')
           };
         });
 
@@ -439,21 +446,21 @@ export default function App() {
 
         const parsed = jsonData.map(row => {
           // Specific columns provided by user
-          const tjmAO = parseNum(findValue(row, ['TJM A.O', 'TJM AO', 'AO']));
-          const tjmPortage = parseNum(findValue(row, ['TJM Portage', 'Portage']));
-          const quantity = parseNum(findValue(row, ['Nbre Jours', 'Nbre de jours', 'Quantite', 'Nb', 'Heures', 'Jours', 'Qté']));
-          const amount = parseNum(findValue(row, ['Total HT', 'Factures HT', 'Montant', 'Total', 'HT', 'Net']));
+          const tjmAO = parseNum(findValue(row, ['TJM A.O', 'TJM AO', 'AO', 'TJM A.O HT', 'TJM AO HT', 'Tarif A']));
+          const tjmPortage = parseNum(findValue(row, ['TJM Portage', 'Portage', 'TJM Portage HT', 'Tarif B']));
+          const quantity = parseNum(findValue(row, ['Nbre Jours', 'Nbre de jours', 'Quantite', 'Nb', 'Heures', 'Jours', 'Qté', 'Quantity', 'Qty', 'Units']));
+          const amount = parseNum(findValue(row, ['Total HT', 'Factures HT', 'Montant', 'Total', 'HT', 'Net', 'Amount', 'Total HT Net', 'Total Net HT']));
           
           return {
-            clientName: String(findValue(row, ['Client', 'Entreprise', 'Société', 'Tiers']) || ''),
-            serviceUser: String(findValue(row, ['Description', 'Consultant', 'Collaborateur', 'Nom', 'Prenom Nom', 'Salarié']) || ''),
+            clientName: String(findValue(row, ['Client', 'Entreprise', 'Société', 'Tiers', 'Customer', 'Third Party', 'Thirdparty']) || ''),
+            serviceUser: String(findValue(row, ['Description', 'Consultant', 'Collaborateur', 'Nom', 'Prenom Nom', 'Salarié', 'User', 'Resource', 'Staff']) || ''),
             amount: amount,
-            date: String(findValue(row, ['Date', 'Commentaires', 'Période', 'Mois']) || ''),
+            date: String(findValue(row, ['Date', 'Commentaires', 'Période', 'Mois', 'Month', 'Period']) || ''),
             quantity: quantity,
             tjmAO,
             tjmPortage
           };
-        }).filter(row => row.serviceUser && row.quantity > 0 && (row.tjmAO > 0 || row.tjmPortage > 0 || row.amount > 0));
+        }).filter(row => row.serviceUser && (row.quantity > 0 || row.amount > 0) && (row.tjmAO > 0 || row.tjmPortage > 0 || row.amount > 0));
         
         if (jsonData.length === 0) {
           setError(`Le fichier ${type} semble être vide.`);
@@ -461,7 +468,9 @@ export default function App() {
         }
 
         if (parsed.length === 0) {
-          setError("Aucune donnée valide trouvée dans le fichier de facturation. Vérifiez que les colonnes 'TJM A.O', 'TJM Portage' ou 'Total HT' sont bien remplies.");
+          const sampleRow = jsonData[0] || {};
+          const keys = Object.keys(sampleRow).join(', ');
+          setError(`Aucune donnée valide trouvée dans le fichier de facturation.\n\nColonnes détectées : ${keys}\n\nVérifiez que les colonnes 'TJM A.O', 'TJM Portage' ou 'Total HT' sont bien remplies et que la colonne 'Description' (ou 'Consultant') contient des noms.`);
           return;
         }
 
@@ -665,7 +674,7 @@ export default function App() {
       sourceSignature = sourceHash.substring(0, 12).toUpperCase();
 
       // Generate Integrity Hash (Now includes Source Signature)
-      const dataToHash = `INV:${invoiceRef}|DATE:${selectedInvoiceDate}|HT:${totalHT.toFixed(2)}|TVA:${tva.toFixed(2)}|TTC:${totalTTC.toFixed(2)}|QTY:${totalQty}|SRC:${sourceSignature}`;
+      const dataToHash = `INV:${invoiceRef}|DATE:${selectedInvoiceDate}|HT:${totalHT.toFixed(2)}|TVA:${tva.toFixed(2)}|TTC:${totalTTC.toFixed(2)}|QTY:${totalQty}|SRC:${sourceSignature}${companyInfo.ice ? `|ICE:${companyInfo.ice}` : ''}`;
       const encoder = new TextEncoder();
       const data = encoder.encode(dataToHash);
       const hashBuffer = await crypto.subtle.digest('SHA-256', data);
@@ -676,7 +685,7 @@ export default function App() {
     const shortHash = hashHex.substring(0, 16).toUpperCase();
 
     // Generate QR Code
-    const dataToHash = `INV:${invoiceRef}|DATE:${selectedInvoiceDate}|HT:${totalHT.toFixed(2)}|TVA:${tva.toFixed(2)}|TTC:${totalTTC.toFixed(2)}|QTY:${totalQty}|SRC:${sourceSignature}`;
+    const dataToHash = `INV:${invoiceRef}|DATE:${selectedInvoiceDate}|HT:${totalHT.toFixed(2)}|TVA:${tva.toFixed(2)}|TTC:${totalTTC.toFixed(2)}|QTY:${totalQty}|SRC:${sourceSignature}${companyInfo.ice ? `|ICE:${companyInfo.ice}` : ''}`;
     const qrContent = `ASQSYS-VERIFY|${dataToHash}|HASH:${hashHex}`;
     const qrDataUrl = await QRCode.toDataURL(qrContent, { margin: 1, width: 100 });
 
@@ -684,6 +693,18 @@ export default function App() {
       // Color band at the very top
       doc.setFillColor(79, 70, 229); // Indigo 600
       doc.rect(0, 0, 210, 8, 'F');
+
+      // ASQSYS & ICE in the band
+      doc.setTextColor(255, 255, 255); // White
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text("ASQSYS", 20, 5.5); // Left side of the band
+      
+      if (companyInfo.ice) {
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(7);
+        doc.text(`ICE: ${companyInfo.ice}`, 190, 5.5, { align: 'right' }); // Right side of the band
+      }
 
       // INVOICE - Top Right
       doc.setFontSize(28);
@@ -728,29 +749,31 @@ export default function App() {
       doc.text(client.name, 20, 61);
       doc.setTextColor(100, 116, 139);
       doc.text(client.address || "Adresse non spécifiée", 20, 66, { maxWidth: 70 });
-      if (client.vatNumber) doc.text(`TVA: ${client.vatNumber}`, 20, 76);
+      let clientY = 76;
+      if (client.vatNumber) {
+        doc.text(`TVA: ${client.vatNumber}`, 20, clientY);
+        clientY += 5;
+      }
+      if (client.ice) {
+        doc.text(`ICE: ${client.ice}`, 20, clientY);
+      }
     };
 
     // Table
     const tableData = lines.map(l => {
-      const tva = l.total * 0.20;
-      const ttc = l.total + tva;
       return [
-        l.service.id,
         `${l.service.description} ${period}`,
         l.quantity,
         formatDH(l.unitPrice),
-        formatDH(l.total),
-        formatDH(tva),
-        formatDH(ttc)
+        formatDH(l.total)
       ];
     });
 
     autoTable(doc, {
       startY: 80,
-      head: [['ID', 'Description', 'Nbre Jours', 'P.U. (excl.)', 'Total HT', 'TVA 20%', 'Montant TTC']],
+      head: [['SERVICES', 'QUANTITY', 'PRICE', 'AMOUNT']],
       body: tableData,
-      theme: 'grid',
+      theme: 'plain',
       headStyles: { 
         fillColor: [79, 70, 229], // Indigo 600
         textColor: 255,
@@ -759,16 +782,21 @@ export default function App() {
         halign: 'center'
       },
       columnStyles: {
-        0: { cellWidth: 30 },
-        2: { halign: 'center', cellWidth: 15 },
-        3: { halign: 'right', cellWidth: 25 },
-        4: { halign: 'right', cellWidth: 25 },
-        5: { halign: 'right', cellWidth: 25 },
-        6: { halign: 'right', cellWidth: 25 }
+        0: { cellWidth: 'auto' },
+        1: { halign: 'center', cellWidth: 25 },
+        2: { halign: 'right', cellWidth: 35 },
+        3: { halign: 'right', cellWidth: 35 }
       },
-      styles: { fontSize: 8, cellPadding: 3 },
+      styles: { fontSize: 8, cellPadding: 1.5 },
       margin: { top: 80, bottom: 40 },
       rowPageBreak: 'avoid',
+      didDrawCell: (data) => {
+        if (data.section === 'body') {
+          doc.setDrawColor(226, 232, 240); // Slate 200 (fine shaded line)
+          doc.setLineWidth(0.1);
+          doc.line(data.cell.x, data.cell.y + data.cell.height, data.cell.x + data.cell.width, data.cell.y + data.cell.height);
+        }
+      },
       didDrawPage: (data) => {
         // Draw Header on each page
         drawHeader(doc);
@@ -879,7 +907,7 @@ export default function App() {
     doc.text(`Arrêté la présente facture à la somme de :`, 20, currentY + 5);
     doc.setFont("helvetica", "bolditalic");
     doc.setTextColor(15, 23, 42); // Slate 900
-    doc.text(`${numberToWordsFR(totalTTC)}`, 20, currentY + 10, { maxWidth: 170 });
+    doc.text(`*** ${numberToWordsFR(totalTTC)} ***`, 20, currentY + 10, { maxWidth: 170 });
 
     currentY += amountInWordsHeight + 4;
 
@@ -1797,6 +1825,18 @@ export default function App() {
                             value={companyInfo.vat}
                             onChange={(e) => {
                               const updated = companies.map(c => c.id === selectedCompanyId ? { ...c, vat: e.target.value } : c);
+                              setCompanies(updated);
+                            }}
+                            className="w-full px-5 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold text-slate-700"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider ml-1">ICE</label>
+                          <input 
+                            type="text" 
+                            value={companyInfo.ice}
+                            onChange={(e) => {
+                              const updated = companies.map(c => c.id === selectedCompanyId ? { ...c, ice: e.target.value } : c);
                               setCompanies(updated);
                             }}
                             className="w-full px-5 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold text-slate-700"
