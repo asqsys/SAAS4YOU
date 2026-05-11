@@ -34,6 +34,8 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const VERSION = "1.2.0";
+
 // --- Types ---
 
 interface Company {
@@ -1886,7 +1888,7 @@ export default function App() {
 
         {/* Footer Info */}
         <footer className="mt-12 text-center text-gray-400 text-sm">
-          <p>© 2026 FactureGen - Solution de facturation automatisée</p>
+          <p>© 2026 FactureGen - Solution de facturation automatisée <span className="ml-2 text-[10px] font-mono bg-slate-100 px-2 py-0.5 rounded-full">v{VERSION}</span></p>
           <div className="mt-4 flex flex-wrap justify-center gap-6">
             <div className="flex items-center space-x-1">
               <div className="w-2 h-2 bg-green-500 rounded-full" />
